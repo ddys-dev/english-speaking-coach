@@ -1,0 +1,15 @@
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+
+# Node (if you ever add tooling)
+node_modules/
+
+# Local notes (never commit secrets/keys here)
+*.local
+secrets.txt
