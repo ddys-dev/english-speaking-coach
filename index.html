@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>SpeakPrep · English Speaking Coach</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ===== Top bar ===== -->
+    <header id="topbar">
+      <button id="btn-back" class="icon-btn" hidden aria-label="Back">‹</button>
+      <div id="topbar-title">SpeakPrep</div>
+      <button id="btn-settings" class="icon-btn" aria-label="Settings">⚙</button>
+    </header>
+
+    <main id="main">
+
+      <!-- ===== HOME ===== -->
+      <section id="screen-home" class="screen active">
+        <div class="hero">
+          <h1>English Speaking Coach</h1>
+          <p class="sub">Practice interviews, questions, and meetings. Speak in English, ask in Chinese when stuck.</p>
+        </div>
+
+        <div id="apikey-warning" class="banner warn" hidden>
+          尚未設定 Gemini API 金鑰。<button class="link" id="goto-settings-1">前往設定 →</button>
+        </div>
+
+        <h2 class="section-label">選擇情境類別 · Choose a category</h2>
+        <div class="card-grid" id="category-grid"></div>
+
+        <div class="home-actions">
+          <button class="ghost-btn" id="btn-history">📚 練習紀錄 History</button>
+        </div>
+      </section>
+
+      <!-- ===== SCENARIO SETUP ===== -->
+      <section id="screen-scenario" class="screen">
+        <h2 class="section-label" id="scenario-cat-label"></h2>
+
+        <div class="field">
+          <label>練習模組 · Module</label>
+          <div class="pill-row" id="module-row"></div>
+        </div>
+
+        <div class="field" id="domain-field">
+          <label>領域 · Domain</label>
+          <div class="pill-row" id="domain-row"></div>
+        </div>
+
+        <div class="field">
+          <label>難度 · Difficulty</label>
+          <div class="pill-row" id="difficulty-row"></div>
+        </div>
+
+        <div class="field" id="custom-field">
+          <label>自訂背景（選填）· Custom context (optional)</label>
+          <textarea id="custom-context" rows="3" placeholder="例：對方是一家做矽光子的美國新創，A 輪，我想評估合作可能。"></textarea>
+        </div>
+
+        <button class="primary-btn" id="btn-start">開始練習 · Start Session</button>
+      </section>
+
+      <!-- ===== CHAT ===== -->
+      <section id="screen-chat" class="screen">
+        <div id="chat-context" class="chat-context"></div>
+        <div id="messages" class="messages"></div>
+        <div id="chat-status" class="chat-status" hidden></div>
+
+        <div class="composer">
+          <textarea id="text-input" rows="1" placeholder="Type in English… (or use the mic)"></textarea>
+          <button id="btn-send" class="send-btn" aria-label="Send">➤</button>
+        </div>
+
+        <div class="mic-row">
+          <button id="btn-mic-en" class="mic-btn">🎤 Speak English</button>
+          <button id="btn-mic-zh" class="mic-btn rescue">🆘 用中文問</button>
+          <button id="btn-end" class="end-btn">End &amp; Get Feedback</button>
+        </div>
+      </section>
+
+      <!-- ===== FEEDBACK ===== -->
+      <section id="screen-feedback" class="screen">
+        <div id="feedback-content"></div>
+        <div class="feedback-actions">
+          <button class="primary-btn" id="btn-practice-again">Practice Again</button>
+          <button class="ghost-btn" id="btn-home">Back to Home</button>
+        </div>
+      </section>
+
+      <!-- ===== HISTORY ===== -->
+      <section id="screen-history" class="screen">
+        <h2 class="section-label">練習紀錄 · History</h2>
+        <div id="history-list"></div>
+      </section>
+
+      <!-- ===== SETTINGS ===== -->
+      <section id="screen-settings" class="screen">
+        <h2 class="section-label">設定 · Settings</h2>
+
+        <div class="field">
+          <label>Gemini API Key</label>
+          <input type="password" id="apikey-input" placeholder="貼上你的金鑰 (AIza...)" autocomplete="off" />
+          <p class="hint">
+            免費申請：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio →</a>
+            金鑰只存在本機瀏覽器，不會上傳。
+          </p>
+        </div>
+
+        <div class="field">
+          <label>模型 · Model</label>
+          <select id="model-select">
+            <option value="gemini-3.5-flash">gemini-3.5-flash（最新旗艦、推薦）</option>
+            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite（更快更省）</option>
+            <option value="gemini-flash-latest">gemini-flash-latest（永遠指向最新）</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash（舊版備用）</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>AI 語音朗讀 · Speak AI replies</label>
+          <label class="switch">
+            <input type="checkbox" id="tts-toggle" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <button class="primary-btn" id="btn-save-settings">儲存 · Save</button>
+        <p id="settings-saved" class="saved-msg" hidden>已儲存 ✓</p>
+
+        <div class="field sync-zone">
+          <label>☁️ 跨裝置同步 · Cloud Sync（選填）</label>
+          <p class="hint" style="margin:0 0 10px">
+            比照會議記錄做法：練習紀錄存到你的<b>私人</b> GitHub repo，電腦/手機自動同步。
+            不設定就只存本機。
+          </p>
+          <input type="text" id="sync-repo" placeholder="資料 repo：帳號/repo 名（例：hpisokplay/english-speaking-coach-data）" autocomplete="off" style="margin-bottom:8px" />
+          <input type="password" id="sync-token" placeholder="GitHub Token（fine-grained，只給 data repo 的 Contents 讀寫）" autocomplete="off" />
+          <p class="hint">
+            建立 Token：<a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">GitHub Fine-grained tokens →</a>
+            權杖只存在本機瀏覽器。
+          </p>
+          <button class="ghost-btn" id="btn-sync-now" style="margin-top:6px">立即同步 · Sync now</button>
+          <p id="sync-status" class="hint" style="margin-top:8px"></p>
+        </div>
+
+        <div class="field danger-zone">
+          <button class="ghost-btn danger" id="btn-clear-history">清除所有練習紀錄</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
