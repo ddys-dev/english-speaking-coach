@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f172a" />
   <title>SpeakPrep · English Speaking Coach</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
@@ -119,10 +119,10 @@
         <div class="field">
           <label>模型 · Model</label>
           <select id="model-select">
-            <option value="gemini-3.5-flash">gemini-3.5-flash（最新旗艦、推薦）</option>
-            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite（更快更省）</option>
-            <option value="gemini-flash-latest">gemini-flash-latest（永遠指向最新）</option>
-            <option value="gemini-2.5-flash">gemini-2.5-flash（舊版備用）</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash（穩定、推薦）</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite（更快）</option>
+            <option value="gemini-flash-latest">gemini-flash-latest（自動最新，部分金鑰不支援）</option>
+            <option value="gemini-3.5-flash">gemini-3.5-flash（新，多數免費金鑰不支援）</option>
           </select>
         </div>
 
@@ -136,6 +136,32 @@
 
         <button class="primary-btn" id="btn-save-settings">儲存 · Save</button>
         <p id="settings-saved" class="saved-msg" hidden>已儲存 ✓</p>
+
+        <div class="field sync-zone">
+          <label>☁️ 跨裝置同步 · Cloud Sync（選填）</label>
+          <p class="hint" style="margin:0 0 10px">
+            比照會議記錄做法：練習紀錄存到你的<b>私人</b> GitHub repo，電腦/手機自動同步。
+            不設定就只存本機。
+          </p>
+          <input type="text" id="sync-repo" placeholder="資料 repo：帳號/repo 名（例：hpisokplay/english-speaking-coach-data）" autocomplete="off" style="margin-bottom:8px" />
+          <input type="password" id="sync-token" placeholder="GitHub Token（fine-grained，只給 data repo 的 Contents 讀寫）" autocomplete="off" />
+          <p class="hint">
+            建立 Token：<a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">GitHub Fine-grained tokens →</a>
+            權杖只存在本機瀏覽器。
+          </p>
+          <button class="ghost-btn" id="btn-sync-now" style="margin-top:6px">立即同步 · Sync now</button>
+          <p id="sync-status" class="hint" style="margin-top:8px"></p>
+        </div>
+
+        <div class="field">
+          <label>ℹ️ 關於 / 更新 · About &amp; Update</label>
+          <p class="hint" style="margin:0 0 10px">目前版本：<b id="app-version">—</b></p>
+          <button class="ghost-btn" id="btn-force-update">🔄 檢查並載入最新版</button>
+          <p class="hint" style="margin-top:8px">
+            若畫面沒更新到最新，按這顆會清除快取並重新載入最新版。
+          </p>
+          <p id="update-status" class="hint" style="margin-top:8px"></p>
+        </div>
 
         <div class="field danger-zone">
           <button class="ghost-btn danger" id="btn-clear-history">清除所有練習紀錄</button>

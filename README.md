@@ -69,6 +69,21 @@ git push -u origin main
 
 ---
 
+## 跨裝置同步（選填，比照會議記錄專案做法）
+
+不設定就只存本機。要在電腦和手機之間同步練習紀錄，做法跟 `meeting-notes` 相同——把資料存到一個**私人** repo 的 `sessions.json`：
+
+1. 另外開一個**私人** repo，例如 `english-speaking-coach-data`。
+2. 建立一把 **Fine-grained personal access token**：<https://github.com/settings/personal-access-tokens>
+   - Repository access 只勾這個 data repo。
+   - Permissions → Repository permissions → **Contents: Read and write**。
+3. 打開 App → ⚙ 設定 → 「跨裝置同步」：
+   - 資料 repo 填 `你的帳號/english-speaking-coach-data`
+   - 貼上 token → 儲存。
+4. 每次練習結束會自動上傳；換裝置貼上同一組設定，開 App 就會自動合併同步。
+
+原理：App 用 GitHub Contents API 讀寫該私人 repo 的 `sessions.json`。含刪除墓碑（tombstone）與時間戳合併，刪除會跨裝置生效、也不會覆蓋別台的較新編輯。token 只存在各裝置本機瀏覽器。
+
 ## 手機語音支援說明（重要）
 
 - **語音辨識（你說話 → 文字）**：**Android Chrome 支援最好**。iPhone Safari 支援較不穩定，若麥克風沒反應，直接用**打字輸入**即可（功能完全一樣，打中文會自動觸發求救模式）。

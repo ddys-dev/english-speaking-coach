@@ -184,3 +184,21 @@ textarea:focus, input:focus, select:focus { outline: none; border-color: var(--a
 .switch input:checked + .slider::before { transform: translateX(22px); }
 
 .saved-msg { color: var(--ok); font-size: 14px; text-align: center; margin-top: 10px; }
+
+/* ===== Update banner ===== */
+#update-bar {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 100; width: calc(100% - 24px); max-width: 616px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #06283d; padding: 12px 14px 12px 18px; border-radius: 14px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.45); font-size: 14.5px; font-weight: 600;
+  animation: slideup .3s ease;
+}
+@keyframes slideup { from { transform: translate(-50%, 20px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+#update-btn {
+  background: #06283d; color: #fff; border: none; border-radius: 10px;
+  padding: 9px 16px; font-size: 14px; font-weight: 700; cursor: pointer; flex-shrink: 0;
+}
+#update-btn:active { opacity: .8; }

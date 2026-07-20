@@ -14,7 +14,7 @@ const LS = {
 const store = {
   get apiKey() { return localStorage.getItem(LS.key) || ''; },
   set apiKey(v){ localStorage.setItem(LS.key, v); },
-  get model()  { return localStorage.getItem(LS.model) || 'gemini-3.5-flash'; },
+  get model()  { return localStorage.getItem(LS.model) || 'gemini-2.5-flash'; },
   set model(v) { localStorage.setItem(LS.model, v); },
   get tts()    { return localStorage.getItem(LS.tts) !== 'off'; },
   set tts(v)   { localStorage.setItem(LS.tts, v ? 'on' : 'off'); },
@@ -194,8 +194,10 @@ function buildContents() {
   }));
 }
 
-async function callGemini(contents, opts = {}) {
-  const model = store.model;
+const FALLBACK_MODEL = 'gemini-2.5-flash';
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function geminiOnce(model, contents, opts) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(store.apiKey)}`;
   const body = {
     contents,
@@ -204,15 +206,43 @@ async function callGemini(contents, opts = {}) {
   if (opts.system) body.system_instruction = { parts: [{ text: opts.system }] };
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
-    const errText = await res.text();
-    if (res.status === 400 && /API key/i.test(errText)) throw new Error('金鑰無效，請到設定檢查。');
-    if (res.status === 429) throw new Error('已達免費額度上限，請稍後再試。');
-    throw new Error('連線錯誤 (' + res.status + ')');
+    const errText = await res.text().catch(() => '');
+    const e = new Error('http'); e.status = res.status; e.body = errText; throw e;
   }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
   if (!text) throw new Error('AI 沒有回覆，請再試一次。');
   return text.trim();
+}
+
+// Retries transient errors (503/500/429/network) with backoff, then falls back
+// to a lighter model if the chosen one stays overloaded.
+async function callGemini(contents, opts = {}) {
+  const primary = store.model || FALLBACK_MODEL;
+  const models = primary === FALLBACK_MODEL ? [primary] : [primary, FALLBACK_MODEL];
+  let lastErr;
+  for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await geminiOnce(model, contents, opts);
+      } catch (e) {
+        lastErr = e;
+        const st = e.status;
+        if (st === 400 && /API key|API_KEY/i.test(e.body || '')) throw new Error('金鑰無效，請到設定檢查。');
+        if (st === 403) throw new Error('金鑰權限不足，或此金鑰未啟用 Gemini API。');
+        // transient → wait and retry same model
+        if (st === 503 || st === 500 || st === 429 || st === undefined) {
+          await sleep((st === 429 ? 1500 : 700) * (attempt + 1));
+          continue;
+        }
+        break; // other error → try next model
+      }
+    }
+    // primary exhausted → loop tries FALLBACK_MODEL next
+  }
+  const st = lastErr && lastErr.status;
+  if (st === 429) throw new Error('已達免費額度上限，請稍後再試。');
+  throw new Error('伺服器忙碌中，已自動重試仍失敗，請稍後再試' + (st ? ' (' + st + ')' : ''));
 }
 
 function startSession() {
@@ -430,15 +460,19 @@ $('btn-home').onclick = () => { show('home'); };
    HISTORY
    ============================================================ */
 function saveHistory(fb) {
+  const now = Date.now();
   const h = store.history;
   h.unshift({
-    ts: Date.now(),
+    id: 's_' + now + '_' + Math.random().toString(36).slice(2, 7),
+    ts: now,
+    updatedAt: now,
     brief: state.scenarioBrief,
     difficulty: state.difficulty,
     score: fb.overallScore,
     fb,
   });
-  store.history = h.slice(0, 100);
+  store.history = h.slice(0, 500);
+  if (syncEnabled()) syncNow(true);
 }
 function renderHistory() {
   const list = $('history-list');
@@ -461,18 +495,125 @@ function loadSettings() {
   $('apikey-input').value = store.apiKey;
   $('model-select').value = store.model;
   $('tts-toggle').checked = store.tts;
+  const c = getSync();
+  $('sync-repo').value = c ? `${c.owner}/${c.repo}` : '';
+  $('sync-token').value = c ? c.token : '';
 }
 $('btn-save-settings').onclick = () => {
   store.apiKey = $('apikey-input').value.trim();
   store.model = $('model-select').value;
   store.tts = $('tts-toggle').checked;
+  // cloud sync config
+  const repo = $('sync-repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+  const token = $('sync-token').value.trim();
+  if (repo && token && repo.includes('/')) {
+    const [owner, name] = repo.split('/');
+    setSync({ owner: owner.trim(), repo: name.trim(), path: 'sessions.json', token });
+  } else if (!repo && !token) {
+    setSync(null);
+  }
   $('settings-saved').hidden = false;
   setTimeout(() => { $('settings-saved').hidden = true; }, 1500);
   renderHome();
+  if (syncEnabled()) syncNow(false);
 };
 $('btn-clear-history').onclick = () => {
-  if (confirm('確定要清除所有練習紀錄嗎？此動作無法復原。')) { store.history = []; renderHistory(); }
+  if (confirm('確定要清除所有練習紀錄嗎？此動作無法復原。')) {
+    const now = Date.now(); const d = getDeleted();
+    for (const s of store.history) { if (s.id) { d.ids.push(s.id); d.at[s.id] = now; } }
+    setDeleted(d);
+    store.history = [];
+    renderHistory();
+    if (syncEnabled()) syncNow(true);
+  }
 };
+
+/* ============================================================
+   CLOUD SYNC  (GitHub-as-database — same pattern as DD meeting-notes)
+   Practice sessions are stored as sessions.json in a PRIVATE repo.
+   Any device with the same token reads/writes the same file → sync.
+   Tombstones let deletions propagate across devices.
+   ============================================================ */
+const SYNC_KEY = 'sp_sync';
+const DEL_KEY = 'sp_deleted';
+function getSync() { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || null; } catch { return null; } }
+function setSync(c) { if (c) localStorage.setItem(SYNC_KEY, JSON.stringify(c)); else localStorage.removeItem(SYNC_KEY); }
+function syncEnabled() { const c = getSync(); return !!(c && c.token && c.owner && c.repo); }
+function getDeleted() { try { return JSON.parse(localStorage.getItem(DEL_KEY)) || { ids: [], at: {} }; } catch { return { ids: [], at: {} }; } }
+function setDeleted(d) { localStorage.setItem(DEL_KEY, JSON.stringify(d)); }
+
+// UTF-8 safe base64 (handles Chinese + large files)
+function b64e(str) { const b = new TextEncoder().encode(str); let s = ''; const ch = 0x8000; for (let i = 0; i < b.length; i += ch) s += String.fromCharCode.apply(null, b.subarray(i, i + ch)); return btoa(s); }
+function b64d(x) { const bin = atob(String(x).replace(/\s/g, '')); const b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return new TextDecoder().decode(b); }
+function ghUrl(c) { return `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${c.path || 'sessions.json'}`; }
+function ghHead(c) { return { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' }; }
+
+async function cloudPull() {
+  const c = getSync(); if (!c) throw new Error('尚未設定同步');
+  const res = await fetch(ghUrl(c), { headers: ghHead(c) });
+  if (res.status === 404) return { doc: { sessions: [], deleted: [], deletedAt: {} }, sha: null };
+  if (res.status === 401) throw new Error('GitHub Token 無效或已過期');
+  if (res.status === 403) throw new Error('Token 權限不足（需 Contents 讀寫）');
+  if (!res.ok) throw new Error('雲端讀取失敗 (' + res.status + ')');
+  const data = await res.json();
+  let raw;
+  if (data.content && data.encoding === 'base64') raw = b64d(data.content);
+  else { const r = await fetch(ghUrl(c), { headers: { ...ghHead(c), Accept: 'application/vnd.github.raw+json' } }); if (!r.ok) throw new Error('雲端讀取失敗 (raw ' + r.status + ')'); raw = await r.text(); }
+  let doc; try { doc = JSON.parse(raw); } catch { throw new Error('雲端資料解析失敗，為保護資料已中止同步'); }
+  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.sessions)) throw new Error('雲端資料格式異常，已中止同步');
+  doc.sessions = doc.sessions || []; doc.deleted = doc.deleted || []; doc.deletedAt = doc.deletedAt || {};
+  return { doc, sha: data.sha };
+}
+async function cloudPush(doc, sha) {
+  const c = getSync(); if (!c) throw new Error('尚未設定同步');
+  const body = { message: `update sessions (${new Date().toISOString()})`, content: b64e(JSON.stringify(doc, null, 2)) };
+  if (sha) body.sha = sha;
+  const res = await fetch(ghUrl(c), { method: 'PUT', headers: ghHead(c), body: JSON.stringify(body) });
+  if (res.status === 409) throw new Error('CONFLICT');
+  if (res.status === 401) throw new Error('GitHub Token 無效或已過期');
+  if (!res.ok) throw new Error('雲端寫入失敗 (' + res.status + ')');
+  return res.json();
+}
+
+const TOMB_TTL = 180 * 24 * 3600 * 1000;
+function mergeTomb(a, b, now) { const t = { ...((a && a.at) || {}), ...((b && b.at) || {}) }; const all = new Set([...((a && a.ids) || []), ...((b && b.ids) || [])]); const ids = []; const at = {}; for (const id of all) { const x = t[id]; if (x && now - x > TOMB_TTL) continue; ids.push(id); if (x) at[id] = x; } return { ids, at }; }
+function mergeSessions(A, B, now = Date.now()) {
+  A = A || { sessions: [], deleted: [], deletedAt: {} }; B = B || { sessions: [], deleted: [], deletedAt: {} };
+  const tomb = mergeTomb({ ids: A.deleted, at: A.deletedAt }, { ids: B.deleted, at: B.deletedAt }, now);
+  const del = new Set(tomb.ids); const byId = new Map();
+  for (const s of [...(A.sessions || []), ...(B.sessions || [])]) {
+    if (!s || !s.id || del.has(s.id)) continue;
+    const prev = byId.get(s.id);
+    if (!prev || (s.updatedAt || s.ts || 0) >= (prev.updatedAt || prev.ts || 0)) byId.set(s.id, s);
+  }
+  const sessions = Array.from(byId.values()).sort((x, y) => (y.ts || 0) - (x.ts || 0));
+  return { sessions, deleted: tomb.ids, deletedAt: tomb.at };
+}
+
+function localDoc() { const d = getDeleted(); return { sessions: store.history, deleted: d.ids, deletedAt: d.at }; }
+function applyDoc(doc) { store.history = (doc.sessions || []).slice(0, 500); setDeleted({ ids: doc.deleted || [], at: doc.deletedAt || {} }); }
+function setSyncStatus(t) { const e = $('sync-status'); if (e) e.textContent = t; }
+
+let syncing = false;
+async function syncNow(silent) {
+  if (!syncEnabled()) { if (!silent) setSyncStatus('尚未設定同步'); return; }
+  if (syncing) return; syncing = true;
+  if (!silent) setSyncStatus('同步中…');
+  try {
+    const { doc: cloud, sha } = await cloudPull();
+    const merged = mergeSessions(localDoc(), cloud);
+    applyDoc(merged);
+    try { await cloudPush(merged, sha); }
+    catch (e) {
+      if (e.message === 'CONFLICT') { const again = await cloudPull(); const m2 = mergeSessions(localDoc(), again.doc); applyDoc(m2); await cloudPush(m2, again.sha); }
+      else throw e;
+    }
+    setSyncStatus('已同步 ✓ ' + new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }));
+    if ($('screen-history').classList.contains('active')) renderHistory();
+  } catch (e) { setSyncStatus('⚠️ ' + e.message); }
+  finally { syncing = false; }
+}
+$('btn-sync-now').onclick = () => syncNow(false);
 
 /* ============================================================
    INIT
@@ -481,7 +622,75 @@ renderHome();
 loadSettings();
 show('home', false);
 state.screenStack = ['home'];
+if (syncEnabled()) syncNow(true);
+
+/* ---------- About / force-update (like DD meeting-notes) ---------- */
+const APP_VERSION = 'v6';
+
+(function initAbout() {
+  const ver = document.getElementById('app-version');
+  if (ver) ver.textContent = APP_VERSION;
+
+  const btn = document.getElementById('btn-force-update');
+  const status = document.getElementById('update-status');
+  if (!btn) return;
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = '更新中…';
+    if (status) status.textContent = '正在清除快取並抓取最新版…';
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+    } catch (e) {}
+    // cache-bust the reload so the browser cannot serve a stale index.html
+    location.replace(location.pathname + '?v=' + Date.now());
+  };
+})();
+
+/* ---------- PWA update banner (like DD meeting-notes) ---------- */
+function showUpdateBar(reg) {
+  let bar = document.getElementById('update-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.innerHTML = '<span>🎉 有新版本可用</span><button id="update-btn">立即更新</button>';
+    document.body.appendChild(bar);
+    document.getElementById('update-btn').onclick = () => {
+      document.getElementById('update-btn').textContent = '更新中…';
+      if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+      else location.reload();
+    };
+  }
+  bar.hidden = false;
+}
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar(reg);
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar(reg);
+        });
+      });
+      // check for a new version whenever the app regains focus + every 60s
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+      setInterval(() => reg.update().catch(() => {}), 60000);
+    } catch (e) {}
+  });
+  // reload once the new SW takes control (after user taps 更新)
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return; refreshing = true; location.reload();
+  });
 }
