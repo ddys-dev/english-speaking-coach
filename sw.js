@@ -1,6 +1,6 @@
 /* Simple offline-first cache for the app shell.
    Bump CACHE version when you change files. */
-const CACHE = 'speakprep-v3';
+const CACHE = 'speakprep-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,13 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // Do NOT auto-skipWaiting — wait for the user to tap "更新" in the app,
+  // which posts SKIP_WAITING below. This powers the update banner.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
+});
+
+self.addEventListener('message', (e) => {
+  if (e.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {

@@ -14,7 +14,7 @@ const LS = {
 const store = {
   get apiKey() { return localStorage.getItem(LS.key) || ''; },
   set apiKey(v){ localStorage.setItem(LS.key, v); },
-  get model()  { return localStorage.getItem(LS.model) || 'gemini-3.5-flash'; },
+  get model()  { return localStorage.getItem(LS.model) || 'gemini-2.5-flash'; },
   set model(v) { localStorage.setItem(LS.model, v); },
   get tts()    { return localStorage.getItem(LS.tts) !== 'off'; },
   set tts(v)   { localStorage.setItem(LS.tts, v ? 'on' : 'off'); },
@@ -194,8 +194,10 @@ function buildContents() {
   }));
 }
 
-async function callGemini(contents, opts = {}) {
-  const model = store.model;
+const FALLBACK_MODEL = 'gemini-2.5-flash';
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function geminiOnce(model, contents, opts) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(store.apiKey)}`;
   const body = {
     contents,
@@ -204,15 +206,43 @@ async function callGemini(contents, opts = {}) {
   if (opts.system) body.system_instruction = { parts: [{ text: opts.system }] };
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
-    const errText = await res.text();
-    if (res.status === 400 && /API key/i.test(errText)) throw new Error('金鑰無效，請到設定檢查。');
-    if (res.status === 429) throw new Error('已達免費額度上限，請稍後再試。');
-    throw new Error('連線錯誤 (' + res.status + ')');
+    const errText = await res.text().catch(() => '');
+    const e = new Error('http'); e.status = res.status; e.body = errText; throw e;
   }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
   if (!text) throw new Error('AI 沒有回覆，請再試一次。');
   return text.trim();
+}
+
+// Retries transient errors (503/500/429/network) with backoff, then falls back
+// to a lighter model if the chosen one stays overloaded.
+async function callGemini(contents, opts = {}) {
+  const primary = store.model || FALLBACK_MODEL;
+  const models = primary === FALLBACK_MODEL ? [primary] : [primary, FALLBACK_MODEL];
+  let lastErr;
+  for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await geminiOnce(model, contents, opts);
+      } catch (e) {
+        lastErr = e;
+        const st = e.status;
+        if (st === 400 && /API key|API_KEY/i.test(e.body || '')) throw new Error('金鑰無效，請到設定檢查。');
+        if (st === 403) throw new Error('金鑰權限不足，或此金鑰未啟用 Gemini API。');
+        // transient → wait and retry same model
+        if (st === 503 || st === 500 || st === 429 || st === undefined) {
+          await sleep((st === 429 ? 1500 : 700) * (attempt + 1));
+          continue;
+        }
+        break; // other error → try next model
+      }
+    }
+    // primary exhausted → loop tries FALLBACK_MODEL next
+  }
+  const st = lastErr && lastErr.status;
+  if (st === 429) throw new Error('已達免費額度上限，請稍後再試。');
+  throw new Error('伺服器忙碌中，已自動重試仍失敗，請稍後再試' + (st ? ' (' + st + ')' : ''));
 }
 
 function startSession() {
@@ -594,6 +624,43 @@ show('home', false);
 state.screenStack = ['home'];
 if (syncEnabled()) syncNow(true);
 
+/* ---------- PWA update banner (like DD meeting-notes) ---------- */
+function showUpdateBar(reg) {
+  let bar = document.getElementById('update-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.innerHTML = '<span>🎉 有新版本可用</span><button id="update-btn">立即更新</button>';
+    document.body.appendChild(bar);
+    document.getElementById('update-btn').onclick = () => {
+      document.getElementById('update-btn').textContent = '更新中…';
+      if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+      else location.reload();
+    };
+  }
+  bar.hidden = false;
+}
+
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar(reg);
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar(reg);
+        });
+      });
+      // check for a new version whenever the app regains focus + every 60s
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+      setInterval(() => reg.update().catch(() => {}), 60000);
+    } catch (e) {}
+  });
+  // reload once the new SW takes control (after user taps 更新)
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return; refreshing = true; location.reload();
+  });
 }
