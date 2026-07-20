@@ -1,6 +1,6 @@
 /* Simple offline-first cache for the app shell.
    Bump CACHE version when you change files. */
-const CACHE = 'speakprep-v6';
+const CACHE = 'speakprep-v7';
 const ASSETS = [
   './',
   './index.html',

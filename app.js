@@ -59,16 +59,33 @@ const DIFFICULTIES = [
   { id: 'hard', label: '進階 Hard' },
 ];
 
+/* ---------- Practice stages (document-based sessions) ---------- */
+const STAGES = [
+  { id: 'opening',    zh: '開場白',     en: 'Opening',
+    goal: 'The learner opens the meeting: greet, introduce themselves and their purpose, set an agenda, and hand over.' },
+  { id: 'questions',  zh: '提問',       en: 'Asking Questions',
+    goal: 'The learner probes and asks questions about the material — clarifying, digging into risks, numbers, technology and business model.' },
+  { id: 'discussion', zh: '討論與建議', en: 'Discussion & Suggestions',
+    goal: 'The learner states views, agrees/pushes back, and offers concrete suggestions or next steps.' },
+  { id: 'summary',    zh: '總結',       en: 'Wrap-up & Summary',
+    goal: 'The learner summarises what was covered, confirms decisions and action items, and closes the meeting.' },
+];
+
 /* ---------- App state ---------- */
 const state = {
+  mode: 'classic',    // 'classic' | 'doc'
   category: null,
   module: 'ask',
   domain: null,
   difficulty: 'medium',
   customContext: '',
   scenarioBrief: '',
-  turns: [],          // { role:'user'|'ai', kind:'en'|'zh'|'coach'|'ai', text }
+  turns: [],          // { role:'user'|'ai', kind:'en'|'zh'|'coach'|'ai', text, stage }
   screenStack: [],
+  // document-based practice
+  source: null,       // { kind:'file'|'url'|'text', name, mime, b64|fileUri|url|text }
+  article: null,      // AI-generated scenario package
+  stageIndex: 0,
 };
 
 /* ---------- Element helpers ---------- */
@@ -77,7 +94,7 @@ const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) 
 const hasCJK = (s) => /[㐀-龿]/.test(s);
 
 /* ---------- Screen navigation ---------- */
-const SCREENS = ['home','scenario','chat','feedback','history','settings'];
+const SCREENS = ['home','scenario','source','article','review','chat','feedback','history','settings'];
 function show(name, push = true) {
   SCREENS.forEach(s => $('screen-' + s).classList.toggle('active', s === name));
   if (push && state.screenStack[state.screenStack.length - 1] !== name) state.screenStack.push(name);
@@ -117,6 +134,7 @@ $('btn-history').onclick = () => { renderHistory(); show('history'); };
    SCENARIO SETUP
    ============================================================ */
 function openScenario(catId) {
+  state.mode = 'classic';
   state.category = catId;
   const c = CATEGORIES[catId];
   $('scenario-cat-label').textContent = `${c.emoji} ${c.title} · ${c.en}`;
@@ -162,6 +180,7 @@ $('btn-start').onclick = () => {
    CHAT / CONVERSATION
    ============================================================ */
 function systemPrompt() {
+  if (state.mode === 'doc') return docSystemPrompt();
   const c = CATEGORIES[state.category];
   const mod = MODULES[state.module];
   const workProfile = state.category === 'work'
@@ -204,6 +223,7 @@ async function geminiOnce(model, contents, opts) {
     generationConfig: { temperature: opts.temperature ?? 0.85, ...(opts.json ? { responseMimeType: 'application/json' } : {}) },
   };
   if (opts.system) body.system_instruction = { parts: [{ text: opts.system }] };
+  if (opts.tools) body.tools = opts.tools;
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
@@ -246,8 +266,11 @@ async function callGemini(contents, opts = {}) {
 }
 
 function startSession() {
+  state.mode = 'classic';
   state.turns = [];
   $('messages').innerHTML = '';
+  renderStageBar();
+  updateStageButton();
   const c = CATEGORIES[state.category];
   const m = MODULES[state.module];
   state.scenarioBrief = `${c.emoji} ${m.title} · ${state.domain}`;
@@ -258,6 +281,12 @@ function startSession() {
 }
 
 function addMessage(kind, text) {
+  if (kind === 'stage') {
+    const d = el('div', 'stage-divider', text);
+    $('messages').appendChild(d);
+    d.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    return;
+  }
   const wrap = el('div', 'msg ' + (kind === 'user' ? 'user' : kind === 'coach' ? 'coach' : 'ai'));
   if (kind === 'coach') { const tag = el('span', 'coach-tag', '🆘 COACH'); wrap.appendChild(tag); }
   wrap.appendChild(document.createTextNode(text));
@@ -280,12 +309,17 @@ async function sendToAI(text, isStart = false) {
   if (busy) return;
   const isChinese = !isStart && hasCJK(text);
 
+  const stage = state.mode === 'doc' ? state.stageIndex : null;
+
   if (!isStart) {
     addMessage('user', text);
-    state.turns.push({ role: 'user', kind: isChinese ? 'zh' : 'en', text });
+    state.turns.push({ role: 'user', kind: isChinese ? 'zh' : 'en', text, stage });
   } else {
     // hidden trigger turn
-    state.turns.push({ role: 'user', kind: 'en', text: 'Please begin the session now.' });
+    const trigger = state.mode === 'doc'
+      ? `Begin the "${STAGES[state.stageIndex].en}" stage now.`
+      : 'Please begin the session now.';
+    state.turns.push({ role: 'user', kind: 'en', text: trigger, stage, hidden: true });
   }
 
   busy = true; setStatus('AI thinking');
@@ -294,13 +328,603 @@ async function sendToAI(text, isStart = false) {
     setStatus('');
     const kind = isChinese ? 'coach' : 'ai';
     addMessage(kind, reply);
-    state.turns.push({ role: 'ai', kind, text: reply });
+    state.turns.push({ role: 'ai', kind, text: reply, stage });
     if (store.tts && kind === 'ai') speak(reply);
   } catch (e) {
     setStatus('');
     addMessage('ai', '⚠️ ' + e.message);
   } finally { busy = false; }
 }
+
+/* ============================================================
+   FILES → GEMINI
+   Small files ride along inline (base64). Anything bigger — meeting
+   recordings especially — goes through the resumable Files API, which
+   also gives Gemini time to transcode audio before we ask about it.
+   ============================================================ */
+const INLINE_LIMIT = 15 * 1024 * 1024;   // stay well under the ~20MB request cap
+const GEN_BASE = 'https://generativelanguage.googleapis.com';
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => reject(new Error('讀取檔案失敗'));
+    r.readAsDataURL(file);
+  });
+}
+
+// Guess a mime type Gemini accepts when the browser gives us nothing useful.
+function mimeFor(file) {
+  if (file.type) return file.type;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  return {
+    pdf: 'application/pdf', txt: 'text/plain', md: 'text/plain', csv: 'text/csv',
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', aac: 'audio/aac',
+    ogg: 'audio/ogg', flac: 'audio/flac', mp4: 'video/mp4',
+  }[ext] || 'application/octet-stream';
+}
+
+async function uploadViaFilesAPI(file, onProgress) {
+  const key = encodeURIComponent(store.apiKey);
+  const mime = mimeFor(file);
+  onProgress && onProgress('上傳中… 0%');
+
+  const start = await fetch(`${GEN_BASE}/upload/v1beta/files?key=${key}`, {
+    method: 'POST',
+    headers: {
+      'X-Goog-Upload-Protocol': 'resumable',
+      'X-Goog-Upload-Command': 'start',
+      'X-Goog-Upload-Header-Content-Length': String(file.size),
+      'X-Goog-Upload-Header-Content-Type': mime,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file: { display_name: file.name } }),
+  });
+  if (!start.ok) throw new Error('上傳初始化失敗 (' + start.status + ')');
+  const uploadUrl = start.headers.get('x-goog-upload-url');
+  if (!uploadUrl) {
+    throw new Error(
+      `這個檔案有 ${MB(file.size)}，需要走大檔上傳，但瀏覽器讀不到 Google 的上傳網址。` +
+      '請改用小於 15 MB 的檔案，或先把錄音轉成逐字稿再貼上。');
+  }
+
+  onProgress && onProgress('上傳中… 檔案傳輸');
+  // Content-Length is a forbidden header in fetch — the browser sets it.
+  const put = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'X-Goog-Upload-Command': 'upload, finalize', 'X-Goog-Upload-Offset': '0' },
+    body: file,
+  });
+  if (!put.ok) throw new Error('上傳失敗 (' + put.status + ')');
+  const info = await put.json();
+  let f = info.file;
+  if (!f || !f.uri) throw new Error('上傳失敗：伺服器沒有回傳檔案位置');
+
+  // Audio/video needs server-side processing before it can be referenced.
+  for (let i = 0; i < 60 && f.state === 'PROCESSING'; i++) {
+    onProgress && onProgress('Gemini 處理錄音中… (' + (i * 3) + 's)');
+    await sleep(3000);
+    const r = await fetch(`${GEN_BASE}/v1beta/${f.name}?key=${key}`);
+    if (!r.ok) break;
+    f = await r.json();
+  }
+  if (f.state === 'FAILED') throw new Error('Gemini 無法處理這個檔案，請換一種格式試試。');
+  return { fileUri: f.uri, mime };
+}
+
+// Turn a picked file into a Gemini `parts` entry, choosing inline vs Files API.
+async function filePartFor(file, onProgress) {
+  const mime = mimeFor(file);
+  if (file.size <= INLINE_LIMIT) {
+    onProgress && onProgress('讀取檔案中…');
+    return { inline_data: { mime_type: mime, data: await fileToBase64(file) } };
+  }
+  const { fileUri } = await uploadViaFilesAPI(file, onProgress);
+  return { file_data: { mime_type: mime, file_uri: fileUri } };
+}
+
+const MB = (n) => (n / 1048576).toFixed(1) + ' MB';
+
+// Gemini can't always be pinned to responseMimeType=json (notably when a tool
+// like url_context is enabled), so accept fenced or chatty replies too.
+function parseJson(raw) {
+  const s = String(raw).trim();
+  try { return JSON.parse(s); } catch {}
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) { try { return JSON.parse(fence[1].trim()); } catch {} }
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a !== -1 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch {} }
+  throw new Error('AI 回覆的格式無法解析，請再試一次。');
+}
+
+/* ============================================================
+   FEATURE A — PRACTISE FROM A DOCUMENT / URL
+   ============================================================ */
+let sourceKind = 'file';
+let pickedSourceFile = null;
+
+function initSourceScreen() {
+  state.source = null;
+  pickedSourceFile = null;
+  sourceKind = 'file';
+  $('source-file').value = '';
+  $('source-url').value = '';
+  $('source-text').value = '';
+  $('source-goal').value = '';
+  $('source-picked').textContent = '';
+  $('source-status').textContent = '';
+
+  const tabs = [
+    { id: 'file', label: '📎 上傳檔案' },
+    { id: 'url',  label: '🔗 網址' },
+    { id: 'text', label: '📝 貼上文字' },
+  ];
+  const row = $('source-tabs'); row.innerHTML = '';
+  tabs.forEach(t => {
+    const p = el('button', 'pill' + (t.id === 'file' ? ' active' : ''), t.label);
+    p.onclick = () => {
+      sourceKind = t.id;
+      [...row.children].forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      ['file','url','text'].forEach(k => { $('source-pane-' + k).hidden = k !== t.id; });
+    };
+    row.appendChild(p);
+  });
+
+  const fr = $('source-difficulty-row'); fr.innerHTML = '';
+  state.difficulty = 'medium';
+  DIFFICULTIES.forEach(d => {
+    const p = el('button', 'pill' + (d.id === 'medium' ? ' active' : ''), d.label);
+    p.onclick = () => { state.difficulty = d.id; [...fr.children].forEach(x => x.classList.remove('active')); p.classList.add('active'); };
+    fr.appendChild(p);
+  });
+
+  show('source');
+}
+
+$('source-file').onchange = function () {
+  pickedSourceFile = this.files[0] || null;
+  $('source-picked').textContent = pickedSourceFile
+    ? `已選擇：${pickedSourceFile.name}（${MB(pickedSourceFile.size)}）`
+    : '';
+};
+
+const SCENARIO_SHAPE = `{
+  "title": "<short English title of the scenario>",
+  "titleZh": "<same title in Traditional Chinese>",
+  "summaryZh": "<3-4 sentences in Traditional Chinese explaining what this document is about, so the learner grasps it fast>",
+  "article": "<a 250-400 word English briefing article written for the learner to read aloud-ready: the situation, the company/topic, the key facts and numbers, and what is at stake>",
+  "keyPoints": ["<key fact or number worth referencing in the meeting>"],
+  "glossary": [ { "term": "<English term from the material>", "zh": "<short Traditional Chinese gloss>" } ],
+  "yourRole": "<one sentence: who the learner is in this meeting and what they want>",
+  "counterpartRole": "<one sentence: who the AI will play>",
+  "openingHints": ["<English phrase useful for opening this specific meeting>"],
+  "questionIdeas": ["<a sharp question worth asking about THIS material>"]
+}`;
+
+async function generateScenario() {
+  if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+
+  const goal = $('source-goal').value.trim();
+  const status = (t) => { $('source-status').textContent = t; };
+  const parts = [];
+  let sourceMeta = null;
+  let tools;
+
+  try {
+    if (sourceKind === 'file') {
+      if (!pickedSourceFile) { status('⚠️ 請先選擇一個檔案。'); return; }
+      $('btn-generate').disabled = true;
+      parts.push(await filePartFor(pickedSourceFile, status));
+      sourceMeta = { kind: 'file', name: pickedSourceFile.name, size: pickedSourceFile.size };
+    } else if (sourceKind === 'url') {
+      const u = $('source-url').value.trim();
+      if (!u) { status('⚠️ 請先貼上網址。'); return; }
+      $('btn-generate').disabled = true;
+      tools = [{ url_context: {} }];
+      parts.push({ text: `Read this page and use it as the source material: ${u}` });
+      sourceMeta = { kind: 'url', name: u };
+    } else {
+      const t = $('source-text').value.trim();
+      if (t.length < 40) { status('⚠️ 貼上的文字太短，請至少貼一段完整內容。'); return; }
+      $('btn-generate').disabled = true;
+      parts.push({ text: 'Source material:\n\n' + t });
+      sourceMeta = { kind: 'text', name: '貼上的文字', chars: t.length };
+    }
+
+    parts.push({ text:
+`You are preparing an English speaking-practice session built on the source material above.
+
+The learner is a non-native English speaker who works in corporate strategy/investment and needs to run real meetings in English.
+${goal ? 'Their stated role and goal for this meeting: ' + goal : 'Assume they are meeting the organisation or people described in the material for the first time.'}
+Difficulty: ${state.difficulty}.
+
+Write the briefing article in clear professional English at a level the learner can read comfortably. Keep summaryZh, titleZh and the glossary Chinese in TRADITIONAL Chinese (繁體中文).
+Base every fact on the source material — do not invent numbers.
+
+Return ONLY JSON with this exact shape:
+${SCENARIO_SHAPE}` });
+
+    status('AI 閱讀中，正在生成情境…');
+    // url_context and forced JSON output don't reliably coexist — when a tool
+    // is in play, ask for JSON in the prompt and parse leniently instead.
+    const raw = await callGemini([{ role: 'user', parts }], { json: !tools, temperature: 0.5, tools });
+    const pkg = parseJson(raw);
+
+    state.mode = 'doc';
+    state.source = sourceMeta;
+    state.article = pkg;
+    state.stageIndex = 0;
+    state.customContext = goal;
+    status('');
+    renderArticle();
+    show('article');
+  } catch (e) {
+    status('⚠️ ' + e.message);
+  } finally {
+    $('btn-generate').disabled = false;
+  }
+}
+
+function renderArticle() {
+  const a = state.article, c = $('article-content');
+  c.innerHTML = '';
+
+  const head = el('div', 'fb-block');
+  head.appendChild(el('h3', null, a.titleZh || a.title || '情境'));
+  if (a.title && a.titleZh) head.appendChild(p(a.title));
+  if (a.summaryZh) head.appendChild(p(a.summaryZh));
+  c.appendChild(head);
+
+  const roles = el('div');
+  if (a.yourRole) roles.appendChild(p(`<b>你的角色：</b>${esc(a.yourRole)}`, true));
+  if (a.counterpartRole) roles.appendChild(p(`<b>AI 扮演：</b>${esc(a.counterpartRole)}`, true));
+  c.appendChild(block('角色設定 · Roles', roles));
+
+  if (a.article) {
+    const art = el('div', 'article-body');
+    String(a.article).split(/\n{2,}/).forEach(para => art.appendChild(p(para)));
+    const sp = el('button', 'speak-again', '🔊 朗讀全文');
+    sp.style.position = 'static';
+    sp.onclick = () => speak(a.article);
+    art.appendChild(sp);
+    c.appendChild(block('Briefing', art));
+  }
+
+  if (a.keyPoints?.length) c.appendChild(block('Key Points', list(a.keyPoints)));
+  if (a.glossary?.length) {
+    const d = el('div');
+    a.glossary.forEach(g => {
+      const row = el('div', 'fb-correction');
+      row.innerHTML = `<span class="now">${esc(g.term)}</span><span class="why">${esc(g.zh || '')}</span>`;
+      d.appendChild(row);
+    });
+    c.appendChild(block('Glossary 詞彙', d));
+  }
+  if (a.openingHints?.length) c.appendChild(block('Opening Phrases 開場可用句', list(a.openingHints)));
+  if (a.questionIdeas?.length) c.appendChild(block('Questions Worth Asking 值得問的問題', list(a.questionIdeas)));
+
+  const note = el('div', 'fb-block');
+  note.appendChild(el('h3', null, '接下來 · What happens next'));
+  note.appendChild(p('讀完後按下方按鈕，會依序練習四個關卡：開場白 → 提問 → 討論與建議 → 總結。每一關結束按「下一關」，最後給總回饋。'));
+  c.appendChild(note);
+}
+
+function docSystemPrompt() {
+  const a = state.article || {};
+  const st = STAGES[state.stageIndex] || STAGES[0];
+  const diff = { easy: 'Keep language simple and be patient.', medium: 'Use natural professional English.', hard: 'Be demanding, ask sharp follow-ups, use fast idiomatic English.' }[state.difficulty];
+
+  return `You are role-playing a business meeting with an English learner, based on material they have just read.
+
+MATERIAL (the learner has read this):
+${a.article || ''}
+Key points: ${(a.keyPoints || []).join(' | ')}
+
+YOUR CHARACTER: ${a.counterpartRole || 'the learner\'s counterpart in this meeting'}
+THE LEARNER: ${a.yourRole || 'a strategy/investment professional'}
+${state.customContext ? 'Their stated goal: ' + state.customContext : ''}
+Difficulty: ${diff}
+
+CURRENT STAGE — "${st.en}" (${st.zh}):
+${st.goal}
+
+RULES:
+- Stay in character and speak ONLY in English while role-playing.
+- Keep each reply short: 2-4 sentences, and end most replies in a way that invites the learner to speak again.
+- Stay inside the CURRENT STAGE. Do not race ahead to later parts of the meeting; the learner advances stages themselves.
+- Draw on the material: reference real details from it so the learner must engage with the content.
+- If the learner's contribution for this stage is thin, nudge them once with a concrete prompt rather than moving on.
+- RESCUE MODE: If the learner writes in Chinese (they are stuck), stop role-playing for that turn and coach: give 1-2 natural English ways to say what they meant with a short note on nuance, invite them to try it aloud, then resume the role-play in English on the next line. Rescue turns are help, not performance.
+- Begin the CURRENT STAGE now with one short line that hands the floor to the learner.`;
+}
+
+function renderStageBar() {
+  const bar = $('stage-bar');
+  if (state.mode !== 'doc') { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.innerHTML = '';
+  STAGES.forEach((s, i) => {
+    const cls = i < state.stageIndex ? 'done' : i === state.stageIndex ? 'current' : '';
+    bar.appendChild(el('span', 'stage-chip ' + cls, `${i + 1}. ${s.zh}`));
+  });
+}
+
+function startStagedSession() {
+  state.mode = 'doc';
+  state.turns = [];
+  state.stageIndex = 0;
+  $('messages').innerHTML = '';
+  const a = state.article || {};
+  state.scenarioBrief = `📄 ${a.titleZh || a.title || '文件情境'}`;
+  $('chat-context').textContent = `${state.scenarioBrief}　|　${DIFFICULTIES.find(d => d.id === state.difficulty).label}`;
+  renderStageBar();
+  updateStageButton();
+  show('chat');
+  sendToAI('__START__', true);
+}
+
+function updateStageButton() {
+  const btn = $('btn-next-stage');
+  if (!btn) return;
+  if (state.mode !== 'doc') { btn.hidden = true; return; }
+  btn.hidden = false;
+  const last = state.stageIndex >= STAGES.length - 1;
+  btn.textContent = last ? '完成 · Finish' : `下一關：${STAGES[state.stageIndex + 1].zh} ▶`;
+}
+
+function nextStage() {
+  if (busy) return;
+  if (state.stageIndex >= STAGES.length - 1) { endSession(); return; }
+  const spoke = state.turns.some(t => t.role === 'user' && t.kind === 'en' && !t.hidden && t.stage === state.stageIndex);
+  if (!spoke && !confirm(`這一關（${STAGES[state.stageIndex].zh}）還沒有任何英文發言，確定要跳過嗎？`)) return;
+  state.stageIndex++;
+  renderStageBar();
+  updateStageButton();
+  const st = STAGES[state.stageIndex];
+  addMessage('stage', `── ${state.stageIndex + 1}. ${st.zh} · ${st.en} ──`);
+  sendToAI('__START__', true);
+}
+
+/* ============================================================
+   FEATURE B — REVIEW A REAL MEETING (recording or transcript)
+   ============================================================ */
+let reviewKind = 'file';
+let pickedReviewFile = null;
+
+function initReviewScreen() {
+  reviewKind = 'file';
+  pickedReviewFile = null;
+  $('review-file').value = '';
+  $('review-text').value = '';
+  $('review-context').value = '';
+  $('review-picked').textContent = '';
+  $('review-status').textContent = '';
+
+  const tabs = [{ id: 'file', label: '🎙 錄音／檔案' }, { id: 'text', label: '📝 貼上逐字稿' }];
+  const row = $('review-tabs'); row.innerHTML = '';
+  tabs.forEach(t => {
+    const p = el('button', 'pill' + (t.id === 'file' ? ' active' : ''), t.label);
+    p.onclick = () => {
+      reviewKind = t.id;
+      [...row.children].forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      ['file','text'].forEach(k => { $('review-pane-' + k).hidden = k !== t.id; });
+    };
+    row.appendChild(p);
+  });
+
+  show('review');
+}
+
+$('review-file').onchange = function () {
+  pickedReviewFile = this.files[0] || null;
+  if (!pickedReviewFile) { $('review-picked').textContent = ''; return; }
+  const big = pickedReviewFile.size > INLINE_LIMIT;
+  $('review-picked').textContent =
+    `已選擇：${pickedReviewFile.name}（${MB(pickedReviewFile.size)}）` +
+    (big ? ' — 檔案較大，會自動分段上傳並等 Gemini 處理，請耐心等候。' : '');
+};
+
+const REVIEW_SHAPE = `{
+  "overallScore": <integer 0-100>,
+  "summaryZh": "<3-4 sentences in Traditional Chinese: what this meeting was, how the learner did overall, and the single most valuable thing to fix>",
+  "meetingSummary": "<3-5 sentence English summary of what was actually discussed>",
+  "english": {
+    "score": <integer 0-100>,
+    "notes": "<2-3 sentences on fluency, pace, hesitation, filler words>",
+    "fillerWords": <integer, -1 if it cannot be judged from a transcript>,
+    "corrections": [ { "original": "<what the learner said>", "improved": "<corrected>", "why": "<short reason>" } ],
+    "naturalPhrasing": [ { "original": "<understandable but awkward>", "better": "<how a native professional would say it>" } ]
+  },
+  "questioning": {
+    "score": <integer 0-100>,
+    "notes": "<2-3 sentences judging the DEPTH of their questions: surface-level vs probing, did they follow up, did they test claims, did they chase numbers and evidence>",
+    "missedOpportunities": [ { "moment": "<what the counterpart said that deserved a follow-up>", "shouldHaveAsked": "<the follow-up question they should have asked>", "why": "<what it would have revealed>" } ],
+    "betterQuestions": [ { "instead": "<a shallow question they asked>", "ask": "<a sharper version>" } ]
+  },
+  "structure": {
+    "score": <integer 0-100>,
+    "notes": "<2-3 sentences on their thinking and questioning ARCHITECTURE: did they have a logical progression, did they cover the ground systematically, did they control the meeting>",
+    "coverage": [ { "area": "<area a professional should have covered, e.g. technology moat / unit economics / team / go-to-market>", "covered": <true|false>, "comment": "<short>" } ],
+    "suggestedFramework": ["<ordered step of a questioning framework they should use next time>"]
+  },
+  "actionPlan": ["<concrete thing to practise before the next real meeting>"]
+}`;
+
+async function runReview() {
+  if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+
+  const status = (t) => { $('review-status').textContent = t; };
+  const ctx = $('review-context').value.trim();
+  const parts = [];
+  let meta = null;
+
+  try {
+    if (reviewKind === 'file') {
+      if (!pickedReviewFile) { status('⚠️ 請先選擇錄音檔或逐字稿。'); return; }
+      $('btn-review-start').disabled = true;
+      parts.push(await filePartFor(pickedReviewFile, status));
+      meta = { kind: 'file', name: pickedReviewFile.name, size: pickedReviewFile.size };
+    } else {
+      const t = $('review-text').value.trim();
+      if (t.length < 80) { status('⚠️ 逐字稿太短，請貼上完整一點的內容。'); return; }
+      $('btn-review-start').disabled = true;
+      parts.push({ text: 'MEETING TRANSCRIPT:\n\n' + t });
+      meta = { kind: 'text', name: '貼上的逐字稿', chars: t.length };
+    }
+
+    parts.push({ text:
+`Above is a real business meeting the learner took part in — either an audio recording or a transcript.
+
+The learner is a non-native English speaker working in corporate strategy and investment. They source targets, open partnership conversations, and interview potential companies and partners. They want to improve on TWO fronts:
+  1. their English, and
+  2. far more importantly, the DEPTH of their questions and the STRUCTURE of their thinking — whether they probed properly, tested claims, chased evidence and numbers, followed up instead of moving on, and worked through the meeting in a logical order.
+${ctx ? 'Context they gave: ' + ctx : ''}
+
+If this is audio, identify which speaker is the learner (the non-native speaker doing the interviewing/probing; the context above may help) and evaluate only that person's contributions.
+Be genuinely critical — they want to get better, not be flattered. Ground every point in something specific that was actually said. If the recording is unclear or too short to judge an area, say so in that section's notes rather than inventing findings.
+
+Write summaryZh in TRADITIONAL Chinese (繁體中文). Everything else in English.
+
+Return ONLY JSON with this exact shape:
+${REVIEW_SHAPE}` });
+
+    status('AI 分析中… 錄音較長時可能需要一兩分鐘。');
+    const raw = await callGemini([{ role: 'user', parts }], { json: true, temperature: 0.35 });
+    const rv = parseJson(raw);
+    status('');
+    renderReview(rv);
+    saveReviewHistory(rv, meta);
+    show('feedback');
+  } catch (e) {
+    status('⚠️ ' + e.message);
+  } finally {
+    $('btn-review-start').disabled = false;
+  }
+}
+
+function scoreRow(label, value) {
+  const d = el('div', 'sub-score');
+  d.innerHTML = `<span class="lbl">${esc(label)}</span><span class="val">${value ?? '–'}</span>`;
+  return d;
+}
+
+function renderReview(rv) {
+  const c = $('feedback-content');
+  c.innerHTML = '';
+  $('btn-practice-again').style.display = 'none';
+
+  const score = el('div', 'fb-score');
+  score.innerHTML = `<div class="num">${rv.overallScore ?? '–'}</div><div class="label">Overall</div>`;
+  c.appendChild(score);
+
+  const subs = el('div', 'sub-scores');
+  subs.appendChild(scoreRow('英文 English', rv.english?.score));
+  subs.appendChild(scoreRow('提問深度 Questioning', rv.questioning?.score));
+  subs.appendChild(scoreRow('思考架構 Structure', rv.structure?.score));
+  c.appendChild(subs);
+
+  if (rv.summaryZh) c.appendChild(block('總評 · Summary', p(rv.summaryZh)));
+  if (rv.meetingSummary) c.appendChild(block('這場會議談了什麼', p(rv.meetingSummary)));
+
+  // --- English ---
+  const en = rv.english || {};
+  if (en.notes || en.corrections?.length || en.naturalPhrasing?.length) {
+    const d = el('div');
+    if (en.notes) d.appendChild(p(en.notes));
+    if (typeof en.fillerWords === 'number' && en.fillerWords >= 0) d.appendChild(p(`Filler words: <b>${en.fillerWords}</b>`, true));
+    (en.corrections || []).forEach(x => {
+      const row = el('div', 'fb-correction');
+      row.innerHTML = `<span class="was">${esc(x.original)}</span> → <span class="now">${esc(x.improved)}</span><span class="why">${esc(x.why || '')}</span>`;
+      d.appendChild(row);
+    });
+    (en.naturalPhrasing || []).forEach(x => {
+      const row = el('div', 'fb-correction');
+      row.innerHTML = `<span class="was">${esc(x.original)}</span> → <span class="now">${esc(x.better)}</span>`;
+      d.appendChild(row);
+    });
+    c.appendChild(block('English 英文表達', d));
+  }
+
+  // --- Questioning depth ---
+  const q = rv.questioning || {};
+  if (q.notes || q.missedOpportunities?.length || q.betterQuestions?.length) {
+    const d = el('div');
+    if (q.notes) d.appendChild(p(q.notes));
+    if (q.missedOpportunities?.length) {
+      d.appendChild(el('h4', 'sub-h', '錯過的追問點 · Missed follow-ups'));
+      q.missedOpportunities.forEach(m => {
+        const row = el('div', 'miss-item');
+        row.innerHTML =
+          `<div class="moment">「${esc(m.moment)}」</div>` +
+          `<div class="ask">→ ${esc(m.shouldHaveAsked)}</div>` +
+          (m.why ? `<div class="why">${esc(m.why)}</div>` : '');
+        d.appendChild(row);
+      });
+    }
+    if (q.betterQuestions?.length) {
+      d.appendChild(el('h4', 'sub-h', '同樣的問題，問得更利 · Sharper versions'));
+      q.betterQuestions.forEach(b => {
+        const row = el('div', 'fb-correction');
+        row.innerHTML = `<span class="was">${esc(b.instead)}</span> → <span class="now">${esc(b.ask)}</span>`;
+        d.appendChild(row);
+      });
+    }
+    c.appendChild(block('提問深度 · Questioning Depth', d));
+  }
+
+  // --- Thinking structure ---
+  const s = rv.structure || {};
+  if (s.notes || s.coverage?.length || s.suggestedFramework?.length) {
+    const d = el('div');
+    if (s.notes) d.appendChild(p(s.notes));
+    if (s.coverage?.length) {
+      d.appendChild(el('h4', 'sub-h', '涵蓋面 · Coverage'));
+      s.coverage.forEach(x => {
+        const row = el('div', 'cover-item' + (x.covered ? ' yes' : ' no'));
+        row.innerHTML = `<span class="mark">${x.covered ? '✓' : '✗'}</span><span class="area">${esc(x.area)}</span>` +
+                        (x.comment ? `<span class="why">${esc(x.comment)}</span>` : '');
+        d.appendChild(row);
+      });
+    }
+    if (s.suggestedFramework?.length) {
+      d.appendChild(el('h4', 'sub-h', '下次可用的提問架構 · Framework'));
+      const ol = el('ol');
+      s.suggestedFramework.forEach(x => ol.appendChild(el('li', null, x)));
+      d.appendChild(ol);
+    }
+    c.appendChild(block('思考與提問架構 · Structure', d));
+  }
+
+  if (rv.actionPlan?.length) c.appendChild(block('下次會議前要練的 · Action Plan', list(rv.actionPlan)));
+}
+
+function saveReviewHistory(rv, meta) {
+  const now = Date.now();
+  const h = store.history;
+  h.unshift({
+    id: 'r_' + now + '_' + Math.random().toString(36).slice(2, 7),
+    ts: now,
+    updatedAt: now,
+    type: 'review',
+    brief: `🎧 會議檢討 · ${meta?.name || ''}`,
+    score: rv.overallScore,
+    source: meta,
+    review: rv,
+  });
+  store.history = h.slice(0, 500);
+  if (syncEnabled()) syncNow(true);
+}
+
+/* ---------- Wiring for the new screens ---------- */
+$('card-doc').onclick = () => initSourceScreen();
+$('card-review').onclick = () => initReviewScreen();
+$('btn-generate').onclick = () => generateScenario();
+$('btn-start-stages').onclick = () => startStagedSession();
+$('btn-article-back').onclick = () => initSourceScreen();
+$('btn-review-start').onclick = () => runReview();
 
 /* ---------- Composer ---------- */
 const textInput = $('text-input');
@@ -314,6 +938,7 @@ function sendTyped() {
 $('btn-send').onclick = sendTyped;
 textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTyped(); } });
 $('btn-end').onclick = endSession;
+$('btn-next-stage').onclick = nextStage;
 
 /* ---------- Speech recognition ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -348,16 +973,27 @@ $('btn-mic-zh').onclick = function () { startRecognition('zh-TW', this); };
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'en-US'; u.rate = 1.0; u.pitch = 1.0;
-  speechSynthesis.speak(u);
+  // Browsers cut long utterances off, so feed it sentence-sized chunks.
+  const chunks = String(text).replace(/\s+/g, ' ').trim().match(/[^.!?]+[.!?]*\s*/g) || [];
+  const queue = [];
+  let buf = '';
+  for (const c of chunks) {
+    if ((buf + c).length > 180 && buf) { queue.push(buf.trim()); buf = c; }
+    else buf += c;
+  }
+  if (buf.trim()) queue.push(buf.trim());
+  for (const q of (queue.length ? queue : [String(text)])) {
+    const u = new SpeechSynthesisUtterance(q);
+    u.lang = 'en-US'; u.rate = 1.0; u.pitch = 1.0;
+    speechSynthesis.speak(u);
+  }
 }
 
 /* ============================================================
    FEEDBACK
    ============================================================ */
 async function endSession() {
-  const englishTurns = state.turns.filter(t => t.role === 'user' && t.kind === 'en');
+  const englishTurns = state.turns.filter(t => t.role === 'user' && t.kind === 'en' && !t.hidden);
   if (englishTurns.length === 0) {
     if (!confirm('這次還沒有任何英文發言，確定要結束嗎？')) return;
     show('home'); return;
@@ -369,11 +1005,14 @@ async function endSession() {
   $('feedback-content').innerHTML = '<div class="chat-status" style="padding:40px 0"><span class="dots">Analysing your English</span></div>';
 
   const transcript = state.turns
-    .filter(t => !(t.role === 'user' && t.text === 'Please begin the session now.'))
+    .filter(t => !t.hidden && t.text !== 'Please begin the session now.')
     .map(t => {
       const who = t.role === 'user' ? (t.kind === 'zh' ? 'LEARNER (Chinese rescue — IGNORE for scoring)' : 'LEARNER (English)') : 'PARTNER';
-      return `${who}: ${t.text}`;
+      const tag = (state.mode === 'doc' && t.stage != null) ? `[${STAGES[t.stage].en}] ` : '';
+      return `${tag}${who}: ${t.text}`;
     }).join('\n');
+
+  if (state.mode === 'doc') { await endDocSession(transcript); return; }
 
   const fbPrompt = `You are a strict but encouraging English speaking coach. Below is a transcript of a role-play. Evaluate ONLY the lines marked "LEARNER (English)". Completely ignore lines marked "Chinese rescue" and the PARTNER lines (those are the AI). Give ALL feedback in English.
 
@@ -397,7 +1036,7 @@ ${transcript}`;
 
   try {
     const raw = await callGemini([{ role: 'user', parts: [{ text: fbPrompt }] }], { json: true, temperature: 0.4 });
-    const fb = JSON.parse(raw);
+    const fb = parseJson(raw);
     renderFeedback(fb);
     saveHistory(fb);
   } catch (e) {
@@ -405,15 +1044,91 @@ ${transcript}`;
   }
 }
 
+/* Document-based sessions get the same English feedback plus per-stage scores
+   and a read on how deeply they questioned the material. */
+async function endDocSession(transcript) {
+  const a = state.article || {};
+  const prompt = `You are a strict but encouraging coach for business English AND for interviewing/questioning skill.
+
+Below is a transcript of a role-played meeting. It is split into stages: ${STAGES.map(s => s.en).join(' → ')}.
+Evaluate ONLY the lines marked "LEARNER (English)". Ignore "Chinese rescue" lines and PARTNER lines.
+
+The learner had read this material beforehand:
+${a.article || ''}
+Key points: ${(a.keyPoints || []).join(' | ')}
+
+Judge not just their English but whether they actually engaged with the material — did they use its facts and numbers, probe the claims in it, and follow up rather than move on?
+Give ALL feedback in English except summaryZh.
+
+Return ONLY JSON with this exact shape:
+{
+  "overallScore": <integer 0-100>,
+  "summary": "<2-3 sentence overall summary in English>",
+  "summaryZh": "<2-3 sentences in Traditional Chinese: how they did and the one thing to fix first>",
+  "stages": [ { "stage": "<one of: ${STAGES.map(s => s.en).join(' | ')}>", "score": <0-100>, "notes": "<1-2 sentences>", "betterVersion": "<a stronger way they could have delivered this stage, in English>" } ],
+  "fluency": { "fillerWords": <integer>, "notes": "<1-2 sentences on pace, hesitation, sentence length>" },
+  "corrections": [ { "original": "<learner's phrase>", "improved": "<corrected>", "why": "<short reason>" } ],
+  "naturalPhrasing": [ { "original": "<awkward>", "better": "<how a native pro would say it>" } ],
+  "questioning": { "score": <0-100>, "notes": "<2-3 sentences on the DEPTH of their questions>", "betterQuestions": [ { "instead": "<a shallow question they asked>", "ask": "<a sharper version grounded in the material>" } ] },
+  "vocabulary": [ "<useful word/phrase from this material they should own>" ],
+  "patterns": [ "<a reusable sentence pattern for this kind of meeting>" ],
+  "tips": [ "<actionable tip>" ]
+}
+Include one entry in "stages" for every stage the learner actually reached. If they said very little in a stage, score it low and say so.
+
+TRANSCRIPT:
+${transcript}`;
+
+  try {
+    const raw = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], { json: true, temperature: 0.4 });
+    const fb = parseJson(raw);
+    renderFeedback(fb);
+    saveHistory(fb);
+  } catch (e) {
+    $('feedback-content').innerHTML = `<div class="fb-block"><h3>Could not generate feedback</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
 function renderFeedback(fb) {
   const c = $('feedback-content');
   c.innerHTML = '';
+  $('btn-practice-again').style.display = '';
 
   const score = el('div', 'fb-score');
   score.innerHTML = `<div class="num">${fb.overallScore ?? '–'}</div><div class="label">Overall Score</div>`;
   c.appendChild(score);
 
-  if (fb.summary) c.appendChild(block('Summary', p(fb.summary)));
+  if (fb.summary || fb.summaryZh) {
+    const d = el('div');
+    if (fb.summaryZh) d.appendChild(p(fb.summaryZh));
+    if (fb.summary) d.appendChild(p(fb.summary));
+    c.appendChild(block('Summary', d));
+  }
+
+  if (fb.stages?.length) {
+    const d = el('div');
+    fb.stages.forEach((s, i) => {
+      const row = el('div', 'stage-result');
+      row.innerHTML =
+        `<div class="head"><span class="name">${i + 1}. ${esc(s.stage)}</span><span class="val">${s.score ?? '–'}</span></div>` +
+        (s.notes ? `<div class="notes">${esc(s.notes)}</div>` : '') +
+        (s.betterVersion ? `<div class="better"><b>Stronger:</b> ${esc(s.betterVersion)}</div>` : '');
+      d.appendChild(row);
+    });
+    c.appendChild(block('每一關 · Stage by Stage', d));
+  }
+
+  if (fb.questioning) {
+    const d = el('div');
+    if (fb.questioning.score != null) d.appendChild(p(`Questioning depth: <b>${fb.questioning.score}</b>/100`, true));
+    if (fb.questioning.notes) d.appendChild(p(fb.questioning.notes));
+    (fb.questioning.betterQuestions || []).forEach(b => {
+      const row = el('div', 'fb-correction');
+      row.innerHTML = `<span class="was">${esc(b.instead)}</span> → <span class="now">${esc(b.ask)}</span>`;
+      d.appendChild(row);
+    });
+    c.appendChild(block('提問深度 · Questioning Depth', d));
+  }
 
   if (fb.fluency) {
     const f = el('div');
@@ -453,7 +1168,8 @@ function p(html, isHtml) { const e = el('p'); e.style.margin = '0 0 6px'; e.styl
 function list(arr) { const ul = el('ul'); arr.forEach(x => ul.appendChild(el('li', null, x))); return ul; }
 function chips(arr) { const d = el('div'); arr.forEach(x => d.appendChild(el('span', 'chip', x))); return d; }
 
-$('btn-practice-again').onclick = () => startSession();
+$('btn-practice-again').onclick = () =>
+  (state.mode === 'doc' && state.article) ? startStagedSession() : startSession();
 $('btn-home').onclick = () => { show('home'); };
 
 /* ============================================================
@@ -466,9 +1182,14 @@ function saveHistory(fb) {
     id: 's_' + now + '_' + Math.random().toString(36).slice(2, 7),
     ts: now,
     updatedAt: now,
+    type: state.mode === 'doc' ? 'doc' : 'classic',
     brief: state.scenarioBrief,
     difficulty: state.difficulty,
     score: fb.overallScore,
+    // The learner asked for uploaded material to be kept, so the generated
+    // scenario travels with the session (and syncs to their PRIVATE repo).
+    source: state.mode === 'doc' ? state.source : null,
+    article: state.mode === 'doc' ? state.article : null,
     fb,
   });
   store.history = h.slice(0, 500);
@@ -482,8 +1203,18 @@ function renderHistory() {
   h.forEach((item) => {
     const d = el('div', 'hist-item');
     const date = new Date(item.ts).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    d.innerHTML = `<div class="top"><span class="title">${item.brief}</span><span class="score">${item.score ?? '–'}</span></div><div class="meta">${date}</div>`;
-    d.onclick = () => { state.scenarioBrief = item.brief; renderFeedback(item.fb); $('btn-practice-again').style.display = 'none'; show('feedback'); setTimeout(() => { $('btn-practice-again').style.display = ''; }, 50); };
+    const src = item.source?.name ? `<div class="meta">📎 ${esc(item.source.name)}</div>` : '';
+    d.innerHTML = `<div class="top"><span class="title">${esc(item.brief)}</span><span class="score">${item.score ?? '–'}</span></div><div class="meta">${date}</div>${src}`;
+    d.onclick = () => {
+      state.scenarioBrief = item.brief;
+      if (item.type === 'review' && item.review) {
+        renderReview(item.review);
+      } else if (item.fb) {
+        renderFeedback(item.fb);
+        $('btn-practice-again').style.display = 'none';
+      }
+      show('feedback');
+    };
     list.appendChild(d);
   });
 }
@@ -625,7 +1356,7 @@ state.screenStack = ['home'];
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

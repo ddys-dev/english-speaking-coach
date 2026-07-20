@@ -38,6 +38,18 @@
         <h2 class="section-label">選擇情境類別 · Choose a category</h2>
         <div class="card-grid" id="category-grid"></div>
 
+        <h2 class="section-label">進階 · Advanced</h2>
+        <div class="card-grid">
+          <button class="cat-card" id="card-doc">
+            <div class="emoji">📄</div><h3>文件情境練習</h3>
+            <p>From a Document<br>上傳文件或貼網址 · AI 生成情境 · 分段練習</p>
+          </button>
+          <button class="cat-card" id="card-review">
+            <div class="emoji">🎧</div><h3>檢討真實會議</h3>
+            <p>Review a Real Meeting<br>上傳錄音或逐字稿 · 英文 + 提問深度檢討</p>
+          </button>
+        </div>
+
         <div class="home-actions">
           <button class="ghost-btn" id="btn-history">📚 練習紀錄 History</button>
         </div>
@@ -70,8 +82,94 @@
         <button class="primary-btn" id="btn-start">開始練習 · Start Session</button>
       </section>
 
+      <!-- ===== SOURCE: document / URL → generated scenario ===== -->
+      <section id="screen-source" class="screen">
+        <h2 class="section-label">📄 文件情境練習 · Practice from a Document</h2>
+        <p class="hint" style="margin:-4px 0 14px">
+          上傳一份真實文件、貼一段文字，或給一個網址。AI 會讀完後生成一篇情境文章與背景設定，
+          你讀完就能練習開場、提問、討論與總結。
+        </p>
+
+        <div class="field">
+          <label>① 來源 · Source</label>
+          <div class="pill-row" id="source-tabs"></div>
+
+          <div id="source-pane-file" class="source-pane">
+            <input type="file" id="source-file" accept=".pdf,.txt,.md,.csv,image/*" />
+            <p class="hint">支援 PDF、TXT、Markdown、圖片（掃描件）。Word 檔請先另存成 PDF。</p>
+          </div>
+
+          <div id="source-pane-url" class="source-pane" hidden>
+            <input type="url" id="source-url" placeholder="https://example.com/article" autocomplete="off" />
+            <p class="hint">AI 會自己去讀這個網址。付費牆或需登入的頁面可能讀不到。</p>
+          </div>
+
+          <div id="source-pane-text" class="source-pane" hidden>
+            <textarea id="source-text" rows="6" placeholder="直接貼上文件內容、新聞、公司簡介、會議議程…"></textarea>
+          </div>
+
+          <p id="source-picked" class="hint" style="margin-top:8px"></p>
+        </div>
+
+        <div class="field">
+          <label>② 你的角色與目的（選填）· Your role &amp; goal</label>
+          <textarea id="source-goal" rows="2" placeholder="例：我是策略投資，想評估這家公司是否值得投資，這場是第一次視訊會議。"></textarea>
+        </div>
+
+        <div class="field">
+          <label>③ 難度 · Difficulty</label>
+          <div class="pill-row" id="source-difficulty-row"></div>
+        </div>
+
+        <button class="primary-btn" id="btn-generate">生成情境 · Generate Scenario</button>
+        <p id="source-status" class="hint" style="margin-top:10px"></p>
+      </section>
+
+      <!-- ===== ARTICLE: read before practising ===== -->
+      <section id="screen-article" class="screen">
+        <div id="article-content"></div>
+        <div class="feedback-actions">
+          <button class="primary-btn" id="btn-start-stages">讀完了，開始練習 · Start</button>
+          <button class="ghost-btn" id="btn-article-back">換一份文件</button>
+        </div>
+      </section>
+
+      <!-- ===== REVIEW: real meeting recording / transcript ===== -->
+      <section id="screen-review" class="screen">
+        <h2 class="section-label">🎧 檢討真實會議 · Review a Real Meeting</h2>
+        <p class="hint" style="margin:-4px 0 14px">
+          上傳真實會議的錄音檔或逐字稿。除了英文表達，也會檢討你的
+          <b>提問深度</b>與<b>思考／提問架構</b>。
+        </p>
+
+        <div class="field">
+          <label>① 錄音或逐字稿 · Recording or transcript</label>
+          <div class="pill-row" id="review-tabs"></div>
+
+          <div id="review-pane-file" class="source-pane">
+            <input type="file" id="review-file" accept="audio/*,video/*,.txt,.md,.pdf" />
+            <p class="hint">支援 mp3 / m4a / wav / aac / ogg 錄音，以及 TXT、PDF 逐字稿。長錄音會自動分段上傳。</p>
+          </div>
+
+          <div id="review-pane-text" class="source-pane" hidden>
+            <textarea id="review-text" rows="8" placeholder="貼上逐字稿。若有標示誰在說話（例：Me: / Them:）會分析得更準。"></textarea>
+          </div>
+
+          <p id="review-picked" class="hint" style="margin-top:8px"></p>
+        </div>
+
+        <div class="field">
+          <label>② 這場會議的背景（選填）· Context</label>
+          <textarea id="review-context" rows="2" placeholder="例：與一家矽光子新創的第一次視訊，我是投資方，目標是判斷技術壁壘與量產能力。"></textarea>
+        </div>
+
+        <button class="primary-btn" id="btn-review-start">開始檢討 · Analyse</button>
+        <p id="review-status" class="hint" style="margin-top:10px"></p>
+      </section>
+
       <!-- ===== CHAT ===== -->
       <section id="screen-chat" class="screen">
+        <div id="stage-bar" class="stage-bar" hidden></div>
         <div id="chat-context" class="chat-context"></div>
         <div id="messages" class="messages"></div>
         <div id="chat-status" class="chat-status" hidden></div>
@@ -84,6 +182,7 @@
         <div class="mic-row">
           <button id="btn-mic-en" class="mic-btn">🎤 Speak English</button>
           <button id="btn-mic-zh" class="mic-btn rescue">🆘 用中文問</button>
+          <button id="btn-next-stage" class="stage-btn" hidden>下一關 ▶</button>
           <button id="btn-end" class="end-btn">End &amp; Get Feedback</button>
         </div>
       </section>
