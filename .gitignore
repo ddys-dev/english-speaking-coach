@@ -13,3 +13,8 @@ node_modules/
 # Local notes (never commit secrets/keys here)
 *.local
 secrets.txt
+
+# Internal docs — contain personal / employer / account details.
+# Keep these on your own machine only; this repo is PUBLIC.
+專案交接.md
+部署步驟.md
