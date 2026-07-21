@@ -248,6 +248,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const MODEL_LIST_KEY = 'sp_models';
 const LAST_RESORT_MODEL = 'gemini-flash-latest';
 
+const BAD_MODEL_KEY = 'sp_bad_models';
+
 function cachedModels() {
   try { const v = JSON.parse(localStorage.getItem(MODEL_LIST_KEY)); return Array.isArray(v) ? v : []; }
   catch { return []; }
@@ -255,6 +257,23 @@ function cachedModels() {
 function setCachedModels(list) {
   try { localStorage.setItem(MODEL_LIST_KEY, JSON.stringify(list)); } catch {}
 }
+
+/* ListModels advertises models this key cannot actually call — it happily
+   lists gemini-2.5-flash and then answers "no longer available to new users".
+   Remember what really failed so we stop offering it. */
+function badModels() {
+  try { const v = JSON.parse(localStorage.getItem(BAD_MODEL_KEY)); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+function markBadModel(name) {
+  if (!name) return;
+  const b = badModels();
+  if (b.includes(name)) return;
+  b.push(name);
+  try { localStorage.setItem(BAD_MODEL_KEY, JSON.stringify(b)); } catch {}
+}
+const isBadModel = (n) => badModels().includes(n);
+const usableModels = (list) => (list || []).filter(m => !isBadModel(m));
 
 async function fetchModels(key) {
   const res = await fetch(`${GEN_BASE}/v1beta/models?pageSize=200&key=${encodeURIComponent(key)}`);
@@ -282,7 +301,8 @@ function rankModel(name) {
   s += v * 10;
   return s;
 }
-const bestModel = (list) => [...(list || [])].sort((a, b) => rankModel(b) - rankModel(a))[0] || '';
+const bestModel = (list) =>
+  [...usableModels(list)].sort((a, b) => rankModel(b) - rankModel(a))[0] || '';
 
 function fallbackModel() {
   return bestModel(cachedModels()) || LAST_RESORT_MODEL;
@@ -306,9 +326,12 @@ function populateModelSelect(list, selected) {
 async function refreshModels(key) {
   const list = await fetchModels(key || store.apiKey);
   setCachedModels(list);
-  const keep = list.includes(store.model) ? store.model : bestModel(list);
+  // Being listed is not the same as being callable, so a model we have seen
+  // fail is never kept just because it still shows up here.
+  const good = usableModels(list);
+  const keep = (good.includes(store.model) && !isBadModel(store.model)) ? store.model : bestModel(list);
   if (keep && keep !== store.model) store.model = keep;
-  populateModelSelect(list, store.model);
+  populateModelSelect(good.length ? good : list, store.model);
   return list;
 }
 
@@ -350,7 +373,11 @@ async function callGemini(contents, opts = {}) {
     const model = queue.shift();
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await geminiOnce(model, contents, opts);
+        const reply = await geminiOnce(model, contents, opts);
+        // Whatever finally worked becomes the saved choice, so the next call
+        // does not start by retrying a dead model.
+        if (model !== store.model) { store.model = model; populateModelSelect(cachedModels(), model); }
+        return reply;
       } catch (e) {
         lastErr = e;
         const st = e.status;
@@ -365,14 +392,20 @@ async function callGemini(contents, opts = {}) {
       }
     }
     // A 404 means this model is gone or was never available to this key.
-    // Ask Google what the key can actually run, then try the best of those.
-    if (lastErr?.status === 404 && !rediscovered) {
-      rediscovered = true;
-      try {
-        const list = await refreshModels();
-        const next = bestModel(list);
-        if (next && !models.includes(next)) queue.push(next);
-      } catch {}
+    // Record it so it is never chosen again, then try the best of what is left.
+    if (lastErr?.status === 404) {
+      markBadModel(model);
+      if (!rediscovered) {
+        rediscovered = true;
+        try {
+          const list = await refreshModels();
+          const next = bestModel(list);
+          if (next && !models.includes(next)) queue.push(next);
+        } catch {}
+      } else {
+        const next = bestModel(cachedModels());
+        if (next && next !== model && !models.includes(next)) queue.push(next);
+      }
     }
   }
 
@@ -1403,15 +1436,14 @@ $('btn-test-api').onclick = async () => {
   let available = [];
   try {
     available = await refreshModels(key);
-    const best = bestModel(available);
-    lines.push(`這把金鑰可用的模型共 ${available.length} 個，已自動選用：${best}`);
-    lines.push('（清單已更新到上方「模型」下拉選單）');
+    lines.push(`這把金鑰列出 ${available.length} 個模型，實際逐一測試：`);
   } catch (e) {
     lines.push('⚠️ ' + e.message);
   }
 
   const chosen = $('model-select').value || store.model;
   const models = [...new Set([chosen, bestModel(available)].filter(Boolean))];
+  let working = '';
 
   for (const m of models) {
     try {
@@ -1419,13 +1451,23 @@ $('btn-test-api').onclick = async () => {
         `${GEN_BASE}/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Reply with the single word: OK' }] }] }) });
-      if (res.ok) { lines.push(`✅ ${m}：可用`); continue; }
+      if (res.ok) { lines.push(`✅ ${m}：可用`); working = working || m; continue; }
       const body = await res.text().catch(() => '');
       let msg = ''; try { msg = JSON.parse(body)?.error?.message || ''; } catch { msg = body.slice(0, 200); }
+      // Listed but not callable — never offer it again.
+      if (res.status === 404) markBadModel(m);
       lines.push(`❌ ${m}：HTTP ${res.status}${msg ? ' — ' + msg : ''}`);
     } catch (e) {
       lines.push(`❌ ${m}：無法連線 — ${e.message}`);
     }
+  }
+
+  if (working) {
+    store.model = working;
+    populateModelSelect(usableModels(available), working);
+    lines.push(`👉 已設定為使用：${working}`);
+  } else {
+    lines.push('⚠️ 沒有任何模型可用，請確認金鑰是否正確。');
   }
   out.innerHTML = lines.map(esc).join('<br>');
 };
@@ -1539,7 +1581,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v12';
+const APP_VERSION = 'v13';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

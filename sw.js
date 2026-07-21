@@ -1,11 +1,11 @@
 /* Simple offline-first cache for the app shell.
    Bump CACHE version when you change files. */
-const CACHE = 'speakprep-v12';
+const CACHE = 'speakprep-v13';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=12',
-  './app.js?v=12',
+  './styles.css?v=13',
+  './app.js?v=13',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
