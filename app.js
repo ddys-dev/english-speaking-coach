@@ -103,6 +103,29 @@ function show(name, push = true) {
   $('btn-settings').hidden = name === 'settings' || name === 'chat';
   window.scrollTo(0, 0);
 }
+function currentScreen() {
+  const active = SCREENS.find(s => $('screen-' + s).classList.contains('active'));
+  return active || 'home';
+}
+
+/* Reloading for an update drops you back on the home screen, which is
+   disorienting when you triggered it from Settings. Remember where you were
+   (per-tab, so it never leaks into a later visit) and return there. */
+const RETURN_KEY = 'sp_return_screen';
+function rememberScreen() {
+  try { sessionStorage.setItem(RETURN_KEY, currentScreen()); } catch {}
+}
+function restoreScreen() {
+  let name = null;
+  try { name = sessionStorage.getItem(RETURN_KEY); sessionStorage.removeItem(RETURN_KEY); } catch {}
+  if (!name || name === 'home' || !SCREENS.includes(name)) return false;
+  // Chat/feedback state does not survive a reload — only restore static screens.
+  if (['chat','feedback','article'].includes(name)) return false;
+  show(name, false);
+  state.screenStack = ['home', name];
+  return true;
+}
+
 $('btn-back').onclick = () => {
   if (state.screenStack.length > 1) {
     state.screenStack.pop();
@@ -1395,10 +1418,11 @@ renderHome();
 loadSettings();
 show('home', false);
 state.screenStack = ['home'];
+restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
@@ -1411,6 +1435,7 @@ const APP_VERSION = 'v9';
   btn.onclick = async () => {
     btn.disabled = true;
     btn.textContent = '更新中…';
+    rememberScreen();
     if (status) status.textContent = '正在清除快取並抓取最新版…';
     try {
       if ('caches' in window) {
@@ -1444,6 +1469,7 @@ function showUpdateBar(reg) {
     document.body.appendChild(bar);
     document.getElementById('update-btn').onclick = () => {
       document.getElementById('update-btn').textContent = '更新中…';
+      rememberScreen();
       if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
       else location.reload();
     };
