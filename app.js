@@ -14,7 +14,9 @@ const LS = {
 const store = {
   get apiKey() { return localStorage.getItem(LS.key) || ''; },
   set apiKey(v){ localStorage.setItem(LS.key, v); },
-  get model()  { return localStorage.getItem(LS.model) || 'gemini-2.5-flash'; },
+  // No hard-coded default that can be retired out from under us — an alias
+  // that always points at a current model, until discovery replaces it.
+  get model()  { return localStorage.getItem(LS.model) || 'gemini-flash-latest'; },
   set model(v) { localStorage.setItem(LS.model, v); },
   get tts()    { return localStorage.getItem(LS.tts) !== 'off'; },
   set tts(v)   { localStorage.setItem(LS.tts, v ? 'on' : 'off'); },
@@ -236,8 +238,79 @@ function buildContents() {
   }));
 }
 
-const FALLBACK_MODEL = 'gemini-2.5-flash';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* ---------- Model discovery ----------
+   Hard-coding a model name goes stale: Google retires models, and a newly
+   issued key may simply not be entitled to one that used to work
+   ("no longer available to new users"). Ask the key what it can actually
+   run, and keep the answer. */
+const MODEL_LIST_KEY = 'sp_models';
+const LAST_RESORT_MODEL = 'gemini-flash-latest';
+
+function cachedModels() {
+  try { const v = JSON.parse(localStorage.getItem(MODEL_LIST_KEY)); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+function setCachedModels(list) {
+  try { localStorage.setItem(MODEL_LIST_KEY, JSON.stringify(list)); } catch {}
+}
+
+async function fetchModels(key) {
+  const res = await fetch(`${GEN_BASE}/v1beta/models?pageSize=200&key=${encodeURIComponent(key)}`);
+  if (!res.ok) {
+    let msg = ''; const body = await res.text().catch(() => '');
+    try { msg = JSON.parse(body)?.error?.message || ''; } catch { msg = body.slice(0, 200); }
+    throw new Error(`無法取得模型清單 (${res.status})${msg ? '：' + msg : ''}`);
+  }
+  const data = await res.json();
+  return (data.models || [])
+    .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map(m => String(m.name || '').replace(/^models\//, ''))
+    .filter(Boolean);
+}
+
+// Favour a current, general-purpose flash model: fast and cheap enough for
+// back-and-forth practice, while still handling PDFs and audio.
+function rankModel(name) {
+  let s = 0;
+  if (/flash/.test(name)) s += 100;
+  if (/lite/.test(name)) s -= 25;
+  if (/preview|exp|thinking|tts|image|embedding|vision/.test(name)) s -= 60;
+  if (/latest/.test(name)) s += 5;
+  const v = parseFloat((name.match(/gemini-([0-9]+(?:\.[0-9]+)?)/) || [])[1] || 0);
+  s += v * 10;
+  return s;
+}
+const bestModel = (list) => [...(list || [])].sort((a, b) => rankModel(b) - rankModel(a))[0] || '';
+
+function fallbackModel() {
+  return bestModel(cachedModels()) || LAST_RESORT_MODEL;
+}
+
+function populateModelSelect(list, selected) {
+  const sel = $('model-select');
+  if (!sel || !list?.length) return;
+  sel.innerHTML = '';
+  const best = bestModel(list);
+  list.sort((a, b) => rankModel(b) - rankModel(a)).forEach(m => {
+    const o = document.createElement('option');
+    o.value = m;
+    o.textContent = m + (m === best ? '（推薦）' : '');
+    sel.appendChild(o);
+  });
+  sel.value = list.includes(selected) ? selected : best;
+}
+
+// Refresh the list from Google; returns the models it can actually run.
+async function refreshModels(key) {
+  const list = await fetchModels(key || store.apiKey);
+  setCachedModels(list);
+  const keep = list.includes(store.model) ? store.model : bestModel(list);
+  if (keep && keep !== store.model) store.model = keep;
+  populateModelSelect(list, store.model);
+  return list;
+}
 
 async function geminiOnce(model, contents, opts) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(store.apiKey)}`;
@@ -267,10 +340,14 @@ async function geminiOnce(model, contents, opts) {
 // Retries transient errors (503/500/429/network) with backoff, then falls back
 // to a lighter model if the chosen one stays overloaded.
 async function callGemini(contents, opts = {}) {
-  const primary = store.model || FALLBACK_MODEL;
-  const models = primary === FALLBACK_MODEL ? [primary] : [primary, FALLBACK_MODEL];
+  const primary = store.model || fallbackModel();
+  const models = [...new Set([primary, fallbackModel()])];
   let lastErr;
-  for (const model of models) {
+  let rediscovered = false;
+  const queue = [...models];
+
+  while (queue.length) {
+    const model = queue.shift();
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         return await geminiOnce(model, contents, opts);
@@ -287,15 +364,25 @@ async function callGemini(contents, opts = {}) {
         break; // other error → try next model
       }
     }
-    // primary exhausted → loop tries FALLBACK_MODEL next
+    // A 404 means this model is gone or was never available to this key.
+    // Ask Google what the key can actually run, then try the best of those.
+    if (lastErr?.status === 404 && !rediscovered) {
+      rediscovered = true;
+      try {
+        const list = await refreshModels();
+        const next = bestModel(list);
+        if (next && !models.includes(next)) queue.push(next);
+      } catch {}
+    }
   }
+
   const st = lastErr && lastErr.status;
   const detail = (lastErr && lastErr.detail) ? '：' + lastErr.detail : '';
   if (st === 429) throw new Error('已達免費額度上限，請稍後再試。' + detail);
   if (st === 404) {
     throw new Error(
-      `找不到模型「${(lastErr && lastErr.model) || store.model}」，你的金鑰可能不支援它。` +
-      `請到 ⚙ 設定把模型改成 gemini-2.5-flash${detail}`);
+      `找不到可用的模型（試過：${models.join('、')}）。` +
+      `請到 ⚙ 設定按「測試金鑰與模型」查看你的金鑰支援哪些模型${detail}`);
   }
   if (st === 400) throw new Error('請求被拒絕' + (detail || '：請確認檔案格式與大小。'));
   throw new Error('伺服器忙碌中，已自動重試仍失敗，請稍後再試' + (st ? ' (' + st + ')' : '') + detail);
@@ -1260,14 +1347,32 @@ function renderHistory() {
    ============================================================ */
 function loadSettings() {
   $('apikey-input').value = store.apiKey;
+
+  const known = cachedModels();
+  if (known.length) populateModelSelect(known, store.model);
+  else if (store.model) {
+    // Keep whatever was saved selectable even before discovery has run.
+    const sel = $('model-select');
+    if (![...sel.options].some(o => o.value === store.model)) {
+      const o = document.createElement('option');
+      o.value = store.model; o.textContent = store.model;
+      sel.insertBefore(o, sel.firstChild);
+    }
+  }
   $('model-select').value = store.model;
+
+  // First run with a key: find out what it can actually run, quietly.
+  if (store.apiKey && !known.length) refreshModels().catch(() => {});
   $('tts-toggle').checked = store.tts;
   const c = getSync();
   $('sync-repo').value = c ? `${c.owner}/${c.repo}` : '';
   $('sync-token').value = c ? c.token : '';
 }
 $('btn-save-settings').onclick = () => {
+  const keyChanged = $('apikey-input').value.trim() !== store.apiKey;
   store.apiKey = $('apikey-input').value.trim();
+  // A different key may be entitled to a different set of models.
+  if (keyChanged && store.apiKey) { setCachedModels([]); refreshModels().catch(() => {}); }
   store.model = $('model-select').value;
   store.tts = $('tts-toggle').checked;
   // cloud sync config
@@ -1291,10 +1396,22 @@ $('btn-test-api').onclick = async () => {
   const key = $('apikey-input').value.trim() || store.apiKey;
   if (!key) { out.textContent = '⚠️ 尚未填入金鑰。'; return; }
 
-  const chosen = $('model-select').value;
-  const models = chosen === FALLBACK_MODEL ? [chosen] : [chosen, FALLBACK_MODEL];
   out.textContent = '測試中…';
   const lines = [];
+
+  // Ask the key what it is entitled to before testing anything.
+  let available = [];
+  try {
+    available = await refreshModels(key);
+    const best = bestModel(available);
+    lines.push(`這把金鑰可用的模型共 ${available.length} 個，已自動選用：${best}`);
+    lines.push('（清單已更新到上方「模型」下拉選單）');
+  } catch (e) {
+    lines.push('⚠️ ' + e.message);
+  }
+
+  const chosen = $('model-select').value || store.model;
+  const models = [...new Set([chosen, bestModel(available)].filter(Boolean))];
 
   for (const m of models) {
     try {
@@ -1422,7 +1539,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
