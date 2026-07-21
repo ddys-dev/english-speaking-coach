@@ -720,9 +720,12 @@ function initSourceScreen() {
 
 $('source-file').onchange = function () {
   pickedSourceFile = this.files[0] || null;
-  $('source-picked').textContent = pickedSourceFile
-    ? `已選擇：${pickedSourceFile.name}（${MB(pickedSourceFile.size)}）`
-    : '';
+  if (!pickedSourceFile) { $('source-picked').textContent = ''; return; }
+  const size = pickedSourceFile.size;
+  let note = '';
+  if (size > 20 * 1024 * 1024) note = ' — 檔案很大，上傳加閱讀可能要好幾分鐘。若只想練其中一段，抽出需要的頁數會快很多。';
+  else if (size > INLINE_LIMIT) note = ' — 檔案較大，會自動分段上傳，請耐心等候。';
+  $('source-picked').textContent = `已選擇：${pickedSourceFile.name}（${MB(size)}）${note}`;
 };
 
 const SCENARIO_SHAPE = `{
@@ -783,9 +786,13 @@ Return ONLY JSON with this exact shape:
 ${SCENARIO_SHAPE}` });
 
     stopTick = startTicker(status, 'AI 閱讀中，正在生成情境…');
+    // A large PDF takes minutes just to read, so the deadline scales with the
+    // source rather than cutting off work that is still progressing.
+    const big = sourceKind === 'file' && pickedSourceFile && pickedSourceFile.size > 5 * 1024 * 1024;
+    const timeoutMs = big ? 600000 : (sourceKind === 'file' ? 300000 : 120000);
     // url_context and forced JSON output don't reliably coexist — when a tool
     // is in play, ask for JSON in the prompt and parse leniently instead.
-    const raw = await callGemini([{ role: 'user', parts }], { json: !tools, temperature: 0.5, tools });
+    const raw = await callGemini([{ role: 'user', parts }], { json: !tools, temperature: 0.5, tools, timeoutMs });
     stopTick(); stopTick = null;
     const pkg = parseJson(raw);
 
@@ -1916,7 +1923,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
