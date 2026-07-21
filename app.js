@@ -102,7 +102,7 @@ const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) 
 const hasCJK = (s) => /[㐀-龿]/.test(s);
 
 /* ---------- Screen navigation ---------- */
-const SCREENS = ['home','scenario','source','article','review','chat','feedback','history','settings'];
+const SCREENS = ['home','scenario','source','article','live','review','chat','feedback','history','settings'];
 function show(name, push = true) {
   SCREENS.forEach(s => $('screen-' + s).classList.toggle('active', s === name));
   if (push && state.screenStack[state.screenStack.length - 1] !== name) state.screenStack.push(name);
@@ -849,6 +849,115 @@ function renderArticle() {
   c.appendChild(note);
 }
 
+/* ---------- Hand the scenario to the Gemini app ----------
+   Live voice over the API would burn free-tier quota fast, and the learner
+   already pays for Gemini. So export the scenario as a brief they can feed
+   to the Gemini app, and take the transcript back afterwards for review. */
+function buildLiveBrief() {
+  const a = state.article || {};
+  const diff = { easy: 'Keep language simple and be patient.', medium: 'Use natural professional English.', hard: 'Be demanding, ask sharp follow-ups, use fast idiomatic English.' }[state.difficulty];
+
+  return `# SpeakPrep — Live Speaking Practice Brief
+# ${a.titleZh || a.title || '文件情境練習'}
+
+## 使用方式（給使用者看，Gemini 可略過）
+1. 把這份檔案上傳給 Gemini，或整段貼上。
+2. 切換到語音 / Live 模式。
+3. 說 "Let's start." 開始；說 "Next stage." 進下一關。
+4. 卡住時直接講中文，它會給你英文講法再帶回情境。
+5. 結束時說 "Give me the full transcript."，把逐字稿貼回 SpeakPrep 的「🎧 檢討真實會議」。
+
+---
+
+## INSTRUCTIONS FOR GEMINI
+
+You are running a spoken English practice session for a non-native speaker who
+works in corporate strategy and investment. Follow these instructions exactly and
+stay in them for the whole conversation.
+
+YOUR CHARACTER: ${a.counterpartRole || "the learner's counterpart in this meeting"}
+THE LEARNER: ${a.yourRole || 'a strategy/investment professional'}
+${state.customContext ? 'THEIR GOAL: ' + state.customContext : ''}
+DIFFICULTY: ${diff}
+
+### MATERIAL (the learner has already read this)
+${a.article || ''}
+
+${(a.keyPoints || []).length ? 'KEY POINTS:\n' + a.keyPoints.map(k => '- ' + k).join('\n') : ''}
+
+${(a.glossary || []).length ? 'GLOSSARY:\n' + a.glossary.map(g => `- ${g.term} — ${g.zh || ''}`).join('\n') : ''}
+
+### RUN THE MEETING IN FOUR STAGES
+${STAGES.map((s, i) => `${i + 1}. ${s.en} — ${s.goal}`).join('\n')}
+
+Stay inside the current stage. Do not advance until the learner says "next stage"
+(or clearly wraps that part up). Announce each new stage in one short line.
+
+### RULES
+- Speak ONLY English while in character. Keep each turn to 2-4 sentences and end
+  in a way that hands the floor back to the learner.
+- Draw on the material above: reference its real details and numbers so the
+  learner has to engage with the content, and push back when their reasoning is thin.
+- If the learner's contribution is shallow, ask one concrete follow-up rather
+  than moving on.
+- RESCUE MODE: if the learner speaks Chinese, they are stuck. Drop character for
+  that turn, give 1-2 natural English ways to say what they meant with a brief note
+  on the nuance, invite them to try it aloud, then resume the role-play in English.
+  Rescue turns are help, not part of their performance.
+- Do not coach or correct mid-conversation otherwise — save it for the transcript.
+
+### WHEN THEY ASK FOR THE TRANSCRIPT
+When the learner says "give me the full transcript", output the entire
+conversation verbatim, nothing else, one line per turn, in exactly this format:
+
+LEARNER: <what they said>
+PARTNER: <what you said>
+
+Mark any Chinese rescue turns as "LEARNER (Chinese):". Do not summarise,
+correct or shorten anything — the transcript is fed back into a coaching tool
+that scores their English, the depth of their questions, and how well they
+structured the meeting.
+
+Begin only when the learner says they are ready.
+`;
+}
+
+function showLiveBrief() {
+  if (!state.article) { alert('請先生成一份情境。'); return; }
+  $('live-brief').value = buildLiveBrief();
+  $('live-copy-status').textContent = '';
+  show('live');
+}
+
+function downloadLiveBrief() {
+  const a = state.article || {};
+  const safe = String(a.titleZh || a.title || 'practice')
+    .replace(/[\\/:*?"<>|]/g, '').slice(0, 40).trim() || 'practice';
+  const blob = new Blob([buildLiveBrief()], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `SpeakPrep 練習指令 - ${safe}.md`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  $('live-copy-status').textContent = '已下載 ✓ 到 Gemini 上傳這個檔案即可開始。';
+}
+
+async function copyLiveBrief() {
+  const text = buildLiveBrief();
+  try {
+    await navigator.clipboard.writeText(text);
+    $('live-copy-status').textContent = '已複製 ✓ 到 Gemini 貼上即可開始。';
+  } catch {
+    // Clipboard permission varies; fall back to selecting the textarea.
+    const ta = $('live-brief');
+    ta.focus(); ta.select();
+    $('live-copy-status').textContent = '請按 Ctrl+C（手機請長按選取）複製下方文字。';
+  }
+}
+
 function docSystemPrompt() {
   const a = state.article || {};
   const st = STAGES[state.stageIndex] || STAGES[0];
@@ -1164,6 +1273,10 @@ $('card-doc').onclick = () => initSourceScreen();
 $('card-review').onclick = () => initReviewScreen();
 $('btn-generate').onclick = () => generateScenario();
 $('btn-start-stages').onclick = () => startStagedSession();
+$('btn-live-brief').onclick = () => showLiveBrief();
+$('btn-live-download').onclick = () => downloadLiveBrief();
+$('btn-live-copy').onclick = () => copyLiveBrief();
+$('btn-live-to-review').onclick = () => { initReviewScreen(); document.querySelectorAll('#review-tabs .pill')[1]?.click(); };
 $('btn-article-back').onclick = () => initSourceScreen();
 $('btn-review-start').onclick = () => runReview();
 
@@ -1766,7 +1879,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v16';
+const APP_VERSION = 'v17';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

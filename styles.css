@@ -289,3 +289,13 @@ input[type=range] {
   background: transparent;
 }
 #rate-label { color: var(--accent); font-weight: 700; }
+
+/* Hand-off to the Gemini app for live voice practice */
+.live-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.live-actions button { flex: 1 1 160px; margin: 0; }
+.steps { margin: 0; padding-left: 20px; }
+.steps li { font-size: 14px; line-height: 1.7; margin-bottom: 6px; }
+#live-brief {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.5; color: var(--muted);
+}

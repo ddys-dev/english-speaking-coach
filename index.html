@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=16" />
+  <link rel="stylesheet" href="styles.css?v=17" />
 </head>
 <body>
   <div id="app">
@@ -132,7 +132,53 @@
         <div id="article-content"></div>
         <div class="feedback-actions">
           <button class="primary-btn" id="btn-start-stages">讀完了，開始練習 · Start</button>
+          <button class="ghost-btn" id="btn-live-brief">🎙 改用 Gemini Live 練習</button>
           <button class="ghost-btn" id="btn-article-back">換一份文件</button>
+        </div>
+      </section>
+
+      <!-- ===== LIVE BRIEF: hand the scenario to the Gemini app ===== -->
+      <section id="screen-live" class="screen">
+        <h2 class="section-label">🎙 用 Gemini Live 練習 · Practice in the Gemini app</h2>
+        <p class="hint" style="margin:-4px 0 14px">
+          把這份指令交給 Gemini，它會照著扮演對方，用真正的即時語音陪你練。
+          語音品質走你的 Gemini 訂閱，不消耗這個 App 的 API 額度。
+        </p>
+
+        <div class="field">
+          <label>① 取得指令檔</label>
+          <div class="live-actions">
+            <button class="primary-btn" id="btn-live-download">⬇️ 下載指令檔</button>
+            <button class="ghost-btn" id="btn-live-copy">📋 複製全部文字</button>
+          </div>
+          <p id="live-copy-status" class="hint" style="margin-top:8px"></p>
+        </div>
+
+        <div class="field">
+          <label>② 在 Gemini 開始練習</label>
+          <ol class="steps">
+            <li>打開 <a href="https://gemini.google.com" target="_blank" rel="noopener">Gemini</a>（手機 App 或網頁）</li>
+            <li>把剛下載的檔案<b>上傳</b>，或直接<b>貼上</b>複製的文字</li>
+            <li>切換到<b>語音 / Live</b> 模式</li>
+            <li>說 <b>"Let's start."</b> 就會開始</li>
+            <li>想進下一關就說 <b>"Next stage."</b></li>
+            <li>卡住時直接<b>講中文</b>，它會給你英文講法再帶回情境</li>
+          </ol>
+        </div>
+
+        <div class="field">
+          <label>③ 練完回來檢討</label>
+          <p class="hint" style="margin:0 0 10px">
+            練習結束時對 Gemini 說 <b>"Give me the full transcript."</b>，
+            複製它輸出的逐字稿，回到這裡貼進「🎧 檢討真實會議」，
+            就會拿到英文、提問深度與思考架構的評分。
+          </p>
+          <button class="ghost-btn" id="btn-live-to-review">🎧 我練完了，去檢討</button>
+        </div>
+
+        <div class="field">
+          <label>指令內容預覽</label>
+          <textarea id="live-brief" rows="12" readonly></textarea>
         </div>
       </section>
 
@@ -293,6 +339,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>
