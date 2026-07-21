@@ -68,16 +68,32 @@ const DIFFICULTIES = [
 ];
 
 /* ---------- Practice stages (document-based sessions) ---------- */
-const STAGES = [
-  { id: 'opening',    zh: '開場白',     en: 'Opening',
-    goal: 'The learner opens the meeting: greet, introduce themselves and their purpose, set an agenda, and hand over.' },
-  { id: 'questions',  zh: '提問',       en: 'Asking Questions',
-    goal: 'The learner probes and asks questions about the material — clarifying, digging into risks, numbers, technology and business model.' },
-  { id: 'discussion', zh: '討論與建議', en: 'Discussion & Suggestions',
-    goal: 'The learner states views, agrees/pushes back, and offers concrete suggestions or next steps.' },
-  { id: 'summary',    zh: '總結',       en: 'Wrap-up & Summary',
-    goal: 'The learner summarises what was covered, confirms decisions and action items, and closes the meeting.' },
-];
+/* A business meeting and buying a train ticket do not have the same shape —
+   "wrap up the action items" is meaningless at a restaurant. Each kind of
+   session gets stages that match how that conversation actually runs. */
+const STAGE_SETS = {
+  meeting: [
+    { id: 'opening',    zh: '開場白',     en: 'Opening',
+      goal: 'The learner opens the meeting: greet, introduce themselves and their purpose, set an agenda, and hand over.' },
+    { id: 'questions',  zh: '提問',       en: 'Asking Questions',
+      goal: 'The learner probes and asks questions about the material — clarifying, digging into risks, numbers, technology and business model.' },
+    { id: 'discussion', zh: '討論與建議', en: 'Discussion & Suggestions',
+      goal: 'The learner states views, agrees/pushes back, and offers concrete suggestions or next steps.' },
+    { id: 'summary',    zh: '總結',       en: 'Wrap-up & Summary',
+      goal: 'The learner summarises what was covered, confirms decisions and action items, and closes the meeting.' },
+  ],
+  travel: [
+    { id: 'request',  zh: '提出需求', en: 'Make your request',
+      goal: 'The learner opens politely and states clearly what they need — a room, a table, directions, a ticket.' },
+    { id: 'listen',   zh: '聽懂並回應', en: 'Understand and respond',
+      goal: 'You give real details fast and naturally (prices, times, options, conditions). The learner must confirm what they heard, ask you to repeat or slow down when unsure, and decide.' },
+    { id: 'problem',  zh: '出狀況應變', en: 'Handle a complication',
+      goal: 'Introduce a genuine complication — overbooked, sold out, delayed, a surcharge, the wrong order. Do not resolve it for them. Make the learner complain politely, negotiate, or find an alternative.' },
+    { id: 'close',    zh: '收尾',     en: 'Close politely',
+      goal: 'The learner confirms the final arrangement, checks any remaining detail, thanks you and closes warmly.' },
+  ],
+};
+function stages() { return STAGE_SETS[state.stageSet] || STAGE_SETS.meeting; }
 
 /* ---------- App state ---------- */
 const state = {
@@ -91,9 +107,14 @@ const state = {
   turns: [],          // { role:'user'|'ai', kind:'en'|'zh'|'coach'|'ai', text, stage }
   screenStack: [],
   // document-based practice
-  source: null,       // { kind:'file'|'url'|'text', name, mime, b64|fileUri|url|text }
+  source: null,       // { kind:'file'|'url'|'text'|'work'|'travel', name, ... }
   article: null,      // AI-generated scenario package
   stageIndex: 0,
+  stageSet: 'meeting',
+  // review → drill loop
+  drills: [],
+  drillIndex: 0,
+  drillResults: [],
 };
 
 /* ---------- Element helpers ---------- */
@@ -102,7 +123,7 @@ const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) 
 const hasCJK = (s) => /[㐀-龿]/.test(s);
 
 /* ---------- Screen navigation ---------- */
-const SCREENS = ['home','scenario','source','article','live','review','chat','feedback','history','settings'];
+const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','progress','history','settings'];
 function show(name, push = true) {
   SCREENS.forEach(s => $('screen-' + s).classList.toggle('active', s === name));
   if (push && state.screenStack[state.screenStack.length - 1] !== name) state.screenStack.push(name);
@@ -160,6 +181,7 @@ function renderHome() {
 }
 $('goto-settings-1').onclick = () => show('settings');
 $('btn-history').onclick = () => { renderHistory(); show('history'); };
+$('btn-progress').onclick = () => { renderProgress(); show('progress'); };
 
 /* ============================================================
    SCENARIO SETUP
@@ -197,7 +219,19 @@ function openScenario(catId) {
     fr.appendChild(p);
   });
 
+  const isWork = catId === 'work';
   $('custom-context').value = '';
+  $('prep-status').textContent = '';
+  $('custom-label').textContent = isWork ? '練習對象或主題（選填）· Company or topic' : '想練的具體情況（選填）· The situation';
+  $('custom-context').placeholder = isWork
+    ? '例：Celestial AI，或「一家做矽光子的美國 A 輪新創，我想評估合作可能」'
+    : '例：東京車站要改簽新幹線，或「飯店超賣要換房」';
+  $('custom-hint').textContent = isWork
+    ? '填了公司名或主題，AI 會據此建構對方與情境；留白則自動生成一個該領域的典型標的。'
+    : '填了就照你的情況練；留白則自動挑一個具體場景。';
+  // Meeting modules make no sense at a hotel desk.
+  $('module-row').parentElement.hidden = !isWork;
+
   show('scenario');
 }
 
@@ -206,6 +240,70 @@ $('btn-start').onclick = () => {
   state.customContext = $('custom-context').value.trim();
   startSession();
 };
+
+/* ---------- Prepared sessions for work / travel ----------
+   Being dropped straight into a conversation caps you at the English you
+   already have. The document mode works because it hands you the vocabulary,
+   the phrases and the questions first — so generate the same package here,
+   from a topic or a company name instead of an uploaded file. */
+async function generatePreparedScenario() {
+  if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+
+  const isWork = state.category === 'work';
+  const target = $('custom-context').value.trim();
+  const status = (t) => { $('prep-status').textContent = t; };
+  let stopTick = null;
+
+  const workProfile = `The learner works in the Strategic Investment team of a large electronics group. Their job: source targets, open partnership conversations, and interview potential companies and partners across ${state.domain}. In Medical CDMO, key customers include Medtronic and Johnson & Johnson.`;
+  const modeLine = state.module === 'ask'
+    ? 'The learner will mostly be ASKING questions and doing due diligence.'
+    : 'The learner will be taking part in a MEETING DISCUSSION, stating and defending views.';
+
+  const brief = isWork
+    ? `Build a realistic business meeting for this learner.
+${workProfile}
+${modeLine}
+Domain: ${state.domain}.
+${target ? 'They specifically want to practise this: ' + target + '\nIf that names a real company or technology, use what you know about it and say so accurately; do not invent financials you are unsure of — prefer describing the space and typical figures, and flag anything uncertain.' : 'Invent a plausible, specific counterpart company in this domain — give it a name, a stage, a product and real-sounding numbers.'}`
+    : `Build a realistic travel / daily-life situation for this learner.
+Situation type: ${state.domain}.
+${target ? 'They specifically want to practise this: ' + target : 'Choose a specific, vivid setting — a named city, a real kind of place, a concrete goal.'}
+The learner is a Taiwanese professional travelling abroad. Make it practical: things they must actually say and understand.`;
+
+  const shape = isWork ? SCENARIO_SHAPE : TRAVEL_SHAPE;
+
+  try {
+    $('btn-prep').disabled = true;
+    stopTick = startTicker(status, 'AI 正在準備情境…');
+    const raw = await callGemini([{ role: 'user', parts: [{ text:
+`${brief}
+
+Difficulty: ${state.difficulty}.
+Write the briefing in clear professional English at a level the learner can read comfortably.
+Keep summaryZh, titleZh and the Chinese glosses in TRADITIONAL Chinese (繁體中文).
+
+Return ONLY JSON with this exact shape:
+${shape}` }] }], { json: true, temperature: 0.75, timeoutMs: 120000 });
+    stopTick(); stopTick = null;
+
+    const pkg = parseJson(raw);
+    state.mode = 'doc';
+    state.stageSet = isWork ? 'meeting' : 'travel';
+    state.article = pkg;
+    state.stageIndex = 0;
+    state.customContext = target;
+    state.source = { kind: isWork ? 'work' : 'travel', name: target || state.domain };
+    status('');
+    renderArticle();
+    show('article');
+  } catch (e) {
+    status('⚠️ ' + e.message);
+  } finally {
+    if (stopTick) stopTick();
+    $('btn-prep').disabled = false;
+  }
+}
+$('btn-prep').onclick = () => generatePreparedScenario();
 
 /* ============================================================
    CHAT / CONVERSATION
@@ -535,7 +633,7 @@ async function sendToAI(text, isStart = false) {
   } else {
     // hidden trigger turn
     const trigger = state.mode === 'doc'
-      ? `Begin the "${STAGES[state.stageIndex].en}" stage now.`
+      ? `Begin the "${stages()[state.stageIndex].en}" stage now.`
       : 'Please begin the session now.';
     state.turns.push({ role: 'user', kind: 'en', text: trigger, stage, hidden: true });
   }
@@ -741,6 +839,22 @@ const SCENARIO_SHAPE = `{
   "questionIdeas": ["<a sharp question worth asking about THIS material — give exactly 10, ordered from opening probes to harder challenges, and spread across technology, numbers, competition, risks and next steps>"]
 }`;
 
+/* Travel needs different scaffolding: not "questions worth asking" but the
+   phrases that rescue you when you did not catch what was said. */
+const TRAVEL_SHAPE = `{
+  "title": "<short English title of the situation>",
+  "titleZh": "<same title in Traditional Chinese>",
+  "summaryZh": "<3-4 sentences in Traditional Chinese setting the scene: where you are, what you need, what could go wrong>",
+  "article": "<a 150-250 word English briefing: the setting, what the learner wants, and the details they will need to handle (times, prices, options)>",
+  "keyPoints": ["<a concrete detail the learner must get right, e.g. a time, a price, a condition>"],
+  "glossary": [ { "term": "<English word or phrase they will hear here>", "zh": "<short Traditional Chinese gloss>" } ],
+  "yourRole": "<one sentence: who the learner is and what they need>",
+  "counterpartRole": "<one sentence: who the AI plays — hotel receptionist, station clerk, waiter, local>",
+  "openingHints": ["<a natural English phrase for opening this specific situation — give exactly 5>"],
+  "survivalPhrases": ["<a phrase for when things go wrong: asking someone to repeat or slow down, confirming you understood, apologising, complaining politely, refusing, asking for an alternative — give exactly 8>"],
+  "questionIdeas": ["<a question worth asking in this situation to avoid a nasty surprise — give exactly 6>"]
+}`;
+
 async function generateScenario() {
   if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
 
@@ -848,11 +962,13 @@ function renderArticle() {
     c.appendChild(block('Glossary 詞彙', d));
   }
   if (a.openingHints?.length) c.appendChild(block('Opening Phrases 開場可用句', list(a.openingHints)));
+  if (a.survivalPhrases?.length) c.appendChild(block('Survival Phrases 救命句', list(a.survivalPhrases)));
   if (a.questionIdeas?.length) c.appendChild(block('Questions Worth Asking 值得問的問題', list(a.questionIdeas)));
 
   const note = el('div', 'fb-block');
   note.appendChild(el('h3', null, '接下來 · What happens next'));
-  note.appendChild(p('讀完後按下方按鈕，會依序練習四個關卡：開場白 → 提問 → 討論與建議 → 總結。每一關結束按「下一關」，最後給總回饋。'));
+  note.appendChild(p(`讀完後按下方按鈕，會依序練習四個關卡：${stages().map(s => s.zh).join(' → ')}。` +
+    '每一關結束按「下一關」，練習中隨時可按 📄 資料查看這頁內容，最後給總回饋。'));
   c.appendChild(note);
 }
 
@@ -894,8 +1010,10 @@ ${(a.keyPoints || []).length ? 'KEY POINTS:\n' + a.keyPoints.map(k => '- ' + k).
 
 ${(a.glossary || []).length ? 'GLOSSARY:\n' + a.glossary.map(g => `- ${g.term} — ${g.zh || ''}`).join('\n') : ''}
 
-### RUN THE MEETING IN FOUR STAGES
-${STAGES.map((s, i) => `${i + 1}. ${s.en} — ${s.goal}`).join('\n')}
+${(a.survivalPhrases || []).length ? 'SURVIVAL PHRASES the learner has been given:\n' + a.survivalPhrases.map(s => '- ' + s).join('\n') : ''}
+
+### RUN IT IN FOUR STAGES
+${stages().map((s, i) => `${i + 1}. ${s.en} — ${s.goal}`).join('\n')}
 
 Stay inside the current stage. Do not advance until the learner says "next stage"
 (or clearly wraps that part up). Announce each new stage in one short line.
@@ -1003,10 +1121,14 @@ async function copyLiveBrief() {
 
 function docSystemPrompt() {
   const a = state.article || {};
-  const st = STAGES[state.stageIndex] || STAGES[0];
+  const st = stages()[state.stageIndex] || stages()[0];
   const diff = { easy: 'Keep language simple and be patient.', medium: 'Use natural professional English.', hard: 'Be demanding, ask sharp follow-ups, use fast idiomatic English.' }[state.difficulty];
 
-  return `You are role-playing a business meeting with an English learner, based on material they have just read.
+  const kind = state.stageSet === 'travel'
+    ? 'a real-life travel/daily-life situation'
+    : 'a business meeting';
+
+  return `You are role-playing ${kind} with an English learner, based on material they have just read.
 
 MATERIAL (the learner has read this):
 ${a.article || ''}
@@ -1023,8 +1145,11 @@ ${st.goal}
 RULES:
 - Stay in character and speak ONLY in English while role-playing.
 - Keep each reply short: 2-4 sentences, and end most replies in a way that invites the learner to speak again.
-- Stay inside the CURRENT STAGE. Do not race ahead to later parts of the meeting; the learner advances stages themselves.
+- Stay inside the CURRENT STAGE. Do not race ahead; the learner advances stages themselves.
 - Draw on the material: reference real details from it so the learner must engage with the content.
+${state.stageSet === 'travel'
+  ? '- Speak like a real member of staff or local, not a teacher: normal pace, contractions, everyday phrasing. Do not simplify unless they ask you to repeat.\n- Never solve a problem for the learner. If they go quiet, wait or repeat once — make them handle it.'
+  : '- Push back when their reasoning is thin, and make them justify a claim rather than accepting it.'}
 - If the learner's contribution for this stage is thin, nudge them once with a concrete prompt rather than moving on.
 - RESCUE MODE: If the learner writes in Chinese (they are stuck), stop role-playing for that turn and coach: give 1-2 natural English ways to say what they meant with a short note on nuance, invite them to try it aloud, then resume the role-play in English on the next line. Rescue turns are help, not performance.
 - Begin the CURRENT STAGE now with one short line that hands the floor to the learner.`;
@@ -1038,12 +1163,18 @@ const STAGE_REF = {
   questions:  ['questionIdeas', 'keyPoints', 'glossary', 'openingHints'],
   discussion: ['keyPoints', 'questionIdeas', 'glossary', 'openingHints'],
   summary:    ['keyPoints', 'glossary', 'questionIdeas', 'openingHints'],
+  // travel
+  request:    ['openingHints', 'survivalPhrases', 'glossary', 'keyPoints'],
+  listen:     ['survivalPhrases', 'glossary', 'keyPoints', 'questionIdeas'],
+  problem:    ['survivalPhrases', 'questionIdeas', 'glossary', 'keyPoints'],
+  close:      ['openingHints', 'survivalPhrases', 'glossary', 'keyPoints'],
 };
 const REF_TITLES = {
-  openingHints:  'Opening Phrases 開場可用句',
-  questionIdeas: 'Questions Worth Asking 值得問的問題',
-  keyPoints:     'Key Points 重點',
-  glossary:      'Glossary 詞彙',
+  openingHints:    'Opening Phrases 開場可用句',
+  questionIdeas:   'Questions Worth Asking 值得問的問題',
+  survivalPhrases: 'Survival Phrases 救命句',
+  keyPoints:       'Key Points 重點',
+  glossary:        'Glossary 詞彙',
 };
 
 function renderRefPanel() {
@@ -1052,7 +1183,7 @@ function renderRefPanel() {
   if (!a || !body) return;
   body.innerHTML = '';
 
-  const stageId = (STAGES[state.stageIndex] || STAGES[0]).id;
+  const stageId = (stages()[state.stageIndex] || stages()[0]).id;
   const order = STAGE_REF[stageId] || STAGE_REF.opening;
 
   order.forEach((key, i) => {
@@ -1103,7 +1234,7 @@ function renderStageBar() {
   refBtn.hidden = !state.article;
   bar.hidden = false;
   bar.innerHTML = '';
-  STAGES.forEach((s, i) => {
+  stages().forEach((s, i) => {
     const cls = i < state.stageIndex ? 'done' : i === state.stageIndex ? 'current' : '';
     bar.appendChild(el('span', 'stage-chip ' + cls, `${i + 1}. ${s.zh}`));
   });
@@ -1115,7 +1246,8 @@ function startStagedSession() {
   state.stageIndex = 0;
   $('messages').innerHTML = '';
   const a = state.article || {};
-  state.scenarioBrief = `📄 ${a.titleZh || a.title || '文件情境'}`;
+  const icon = { work: '💼', travel: '✈️' }[state.source?.kind] || '📄';
+  state.scenarioBrief = `${icon} ${a.titleZh || a.title || '情境練習'}`;
   $('chat-context').textContent = `${state.scenarioBrief}　|　${DIFFICULTIES.find(d => d.id === state.difficulty).label}`;
   renderStageBar();
   updateStageButton();
@@ -1128,20 +1260,20 @@ function updateStageButton() {
   if (!btn) return;
   if (state.mode !== 'doc') { btn.hidden = true; return; }
   btn.hidden = false;
-  const last = state.stageIndex >= STAGES.length - 1;
-  btn.textContent = last ? '完成 · Finish' : `下一關：${STAGES[state.stageIndex + 1].zh} ▶`;
+  const last = state.stageIndex >= stages().length - 1;
+  btn.textContent = last ? '完成 · Finish' : `下一關：${stages()[state.stageIndex + 1].zh} ▶`;
 }
 
 function nextStage() {
   if (busy) return;
-  if (state.stageIndex >= STAGES.length - 1) { endSession(); return; }
+  if (state.stageIndex >= stages().length - 1) { endSession(); return; }
   const spoke = state.turns.some(t => t.role === 'user' && t.kind === 'en' && !t.hidden && t.stage === state.stageIndex);
-  if (!spoke && !confirm(`這一關（${STAGES[state.stageIndex].zh}）還沒有任何英文發言，確定要跳過嗎？`)) return;
+  if (!spoke && !confirm(`這一關（${stages()[state.stageIndex].zh}）還沒有任何英文發言，確定要跳過嗎？`)) return;
   state.stageIndex++;
   renderStageBar();
   updateStageButton();
   if (!$('ref-panel').hidden) renderRefPanel();   // resurface what this stage needs
-  const st = STAGES[state.stageIndex];
+  const st = stages()[state.stageIndex];
   addMessage('stage', `── ${state.stageIndex + 1}. ${st.zh} · ${st.en} ──`);
   sendToAI('__START__', true);
 }
@@ -1361,7 +1493,231 @@ function renderReview(rv) {
   }
 
   if (rv.actionPlan?.length) c.appendChild(block('下次會議前要練的 · Action Plan', list(rv.actionPlan)));
+
+  // Reading a list of missed follow-ups changes nothing; saying them does.
+  const drills = drillsFromReview(rv);
+  if (drills.length) {
+    const cta = el('div', 'fb-block');
+    cta.appendChild(el('h3', null, '🎯 把這些練起來'));
+    cta.appendChild(p(`從這場會議挑出 ${drills.length} 個具體片段，讓你當場重講一次，並和更好的版本逐句比對。`));
+    const b = el('button', 'primary-btn', `重練這 ${drills.length} 個時刻 ▶`);
+    b.onclick = () => startDrills(rv);
+    cta.appendChild(b);
+    c.appendChild(cta);
+  }
 }
+
+/* ============================================================
+   DRILLS — turn a review's findings back into speaking practice
+   A score you cannot act on is a dead end: the missed follow-ups get read
+   once and forgotten. Replay each moment and make them say it better.
+   ============================================================ */
+function drillsFromReview(rv) {
+  const out = [];
+  (rv?.questioning?.missedOpportunities || []).forEach(m => {
+    if (!m?.moment) return;
+    out.push({
+      kind: 'missed',
+      prompt: m.moment,
+      target: m.shouldHaveAsked || '',
+      why: m.why || '',
+      title: '對方這樣說，你當時沒有追問',
+    });
+  });
+  (rv?.questioning?.betterQuestions || []).forEach(b => {
+    if (!b?.instead) return;
+    out.push({
+      kind: 'shallow',
+      prompt: b.instead,
+      target: b.ask || '',
+      why: '',
+      title: '這是你問過的問題，把它問得更利',
+    });
+  });
+  (rv?.english?.naturalPhrasing || []).forEach(x => {
+    if (!x?.original) return;
+    out.push({
+      kind: 'phrasing',
+      prompt: x.original,
+      target: x.better || '',
+      why: '',
+      title: '這句聽得懂，但不夠道地',
+    });
+  });
+  return out;
+}
+
+function startDrills(rv) {
+  const drills = drillsFromReview(rv);
+  if (!drills.length) { alert('這次檢討沒有可以重練的具體片段。'); return; }
+  state.drills = drills;
+  state.drillIndex = 0;
+  state.drillResults = [];
+  renderDrill();
+  show('drill');
+}
+
+function renderDrill() {
+  const d = state.drills[state.drillIndex];
+  const body = $('drill-body');
+  const bar = $('drill-progress');
+
+  bar.innerHTML = '';
+  state.drills.forEach((_, i) => {
+    const cls = i < state.drillIndex ? 'done' : i === state.drillIndex ? 'current' : '';
+    bar.appendChild(el('span', 'stage-chip ' + cls, String(i + 1)));
+  });
+
+  body.innerHTML = '';
+  if (!d) { renderDrillSummary(); return; }
+
+  const head = el('div', 'fb-block');
+  head.appendChild(el('h3', null, `第 ${state.drillIndex + 1} / ${state.drills.length} 題 — ${d.title}`));
+
+  const q = el('div', 'drill-prompt');
+  q.textContent = d.kind === 'missed' ? `「${d.prompt}」` : d.prompt;
+  head.appendChild(q);
+  if (d.kind === 'missed') head.appendChild(p('現在換你 —— 你會怎麼追問？'));
+  else if (d.kind === 'shallow') head.appendChild(p('重問一次，問得更具體、更難迴避。'));
+  else head.appendChild(p('用更自然的說法重講一次。'));
+  if (d.why) head.appendChild(p('（追問到位能挖出：' + d.why + '）'));
+  body.appendChild(head);
+
+  $('drill-input').value = '';
+  $('drill-composer').hidden = false;
+  $('drill-mic').hidden = false;
+  window.scrollTo(0, 0);
+}
+
+let drillBusy = false;
+async function submitDrill() {
+  if (drillBusy) return;
+  const d = state.drills[state.drillIndex];
+  const said = $('drill-input').value.trim();
+  if (!d || !said) return;
+
+  drillBusy = true;
+  const body = $('drill-body');
+  const wait = el('div', 'chat-status');
+  wait.innerHTML = '<span class="dots">Checking</span>';
+  body.appendChild(wait);
+
+  const ctx = d.kind === 'missed'
+    ? `The counterpart said: "${d.prompt}"\nThe learner's follow-up attempt: "${said}"\nA model follow-up would be: "${d.target}"`
+    : `The learner originally said: "${d.prompt}"\nTheir new attempt: "${said}"\nA stronger version would be: "${d.target}"`;
+
+  try {
+    const raw = await callGemini([{ role: 'user', parts: [{ text:
+`You are coaching a non-native English speaker who works in strategy and investment.
+
+${ctx}
+
+Judge their NEW attempt only. Be specific and honest — say so if it is still weak.
+Return ONLY JSON:
+{
+  "score": <integer 0-100>,
+  "verdict": "<one short English sentence on whether this attempt does the job>",
+  "goodBits": ["<something concrete they got right, if any>"],
+  "fixes": [ { "was": "<their wording>", "better": "<improved wording>", "why": "<short>" } ],
+  "modelAnswer": "<the single best version of what they should have said, in natural English>",
+  "zh": "<1-2 sentences in Traditional Chinese explaining the key difference>"
+}` }] }], { json: true, temperature: 0.35, timeoutMs: 90000 });
+
+    const res = parseJson(raw);
+    state.drillResults.push({ drill: d, said, res });
+    wait.remove();
+    renderDrillFeedback(d, said, res);
+  } catch (e) {
+    wait.remove();
+    body.appendChild(block('無法評分', p(e.message)));
+  } finally { drillBusy = false; }
+}
+
+function renderDrillFeedback(d, said, res) {
+  const body = $('drill-body');
+  $('drill-composer').hidden = true;
+  $('drill-mic').hidden = true;
+
+  const c = el('div', 'fb-block');
+  c.appendChild(el('h3', null, `這次得分 ${res.score ?? '–'}`));
+  if (res.verdict) c.appendChild(p(res.verdict));
+  if (res.zh) c.appendChild(p(res.zh));
+
+  const cmp = el('div', 'drill-compare');
+  cmp.innerHTML =
+    `<div class="row"><span class="tag">你說的</span><span class="val was">${esc(said)}</span></div>` +
+    `<div class="row"><span class="tag">更好的說法</span><span class="val now">${esc(res.modelAnswer || d.target)}</span></div>`;
+  c.appendChild(cmp);
+
+  (res.fixes || []).forEach(f => {
+    const row = el('div', 'fb-correction');
+    row.innerHTML = `<span class="was">${esc(f.was)}</span> → <span class="now">${esc(f.better)}</span><span class="why">${esc(f.why || '')}</span>`;
+    c.appendChild(row);
+  });
+  if (res.goodBits?.length) c.appendChild(block('做對的地方', list(res.goodBits)));
+  body.appendChild(c);
+
+  const next = el('button', 'primary-btn',
+    state.drillIndex >= state.drills.length - 1 ? '看總結 · See summary' : '下一題 ▶');
+  next.onclick = () => { state.drillIndex++; renderDrill(); };
+  body.appendChild(next);
+
+  const retry = el('button', 'ghost-btn', '再講一次這題');
+  retry.style.marginTop = '8px';
+  retry.onclick = () => renderDrill();
+  body.appendChild(retry);
+  next.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function renderDrillSummary() {
+  const body = $('drill-body');
+  $('drill-composer').hidden = true;
+  $('drill-mic').hidden = true;
+  const done = state.drillResults;
+  const avg = done.length ? Math.round(done.reduce((s, r) => s + (r.res.score || 0), 0) / done.length) : 0;
+
+  const score = el('div', 'fb-score');
+  score.innerHTML = `<div class="num">${avg}</div><div class="label">重練平均分</div>`;
+  body.appendChild(score);
+
+  const d = el('div');
+  done.forEach((r, i) => {
+    const row = el('div', 'stage-result');
+    row.innerHTML =
+      `<div class="head"><span class="name">第 ${i + 1} 題</span><span class="val">${r.res.score ?? '–'}</span></div>` +
+      `<div class="notes">${esc(r.said)}</div>` +
+      `<div class="better"><b>更好：</b>${esc(r.res.modelAnswer || r.drill.target)}</div>`;
+    d.appendChild(row);
+  });
+  body.appendChild(block('逐題回顧', d));
+
+  saveDrillHistory(avg);
+
+  const home = el('button', 'ghost-btn', '回首頁');
+  home.onclick = () => show('home');
+  body.appendChild(home);
+}
+
+function saveDrillHistory(avg) {
+  const now = Date.now();
+  const h = store.history;
+  h.unshift({
+    id: 'd_' + now + '_' + Math.random().toString(36).slice(2, 7),
+    ts: now, updatedAt: now, type: 'drill',
+    brief: `🎯 重練 · ${state.drillResults.length} 題`,
+    score: avg,
+    drills: state.drillResults.map(r => ({ prompt: r.drill.prompt, said: r.said, score: r.res.score, model: r.res.modelAnswer })),
+  });
+  store.history = h.slice(0, 500);
+  if (syncEnabled()) syncNow(true);
+}
+
+$('drill-send').onclick = () => submitDrill();
+$('drill-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitDrill(); }
+});
+$('drill-skip').onclick = () => { state.drillIndex++; renderDrill(); };
+$('drill-mic').onclick = function () { startRecognition('en-US', this, $('drill-input'), () => submitDrill()); };
 
 function saveReviewHistory(rv, meta) {
   const now = Date.now();
@@ -1412,9 +1768,11 @@ $('btn-ref-close').onclick = () => toggleRefPanel(false);
 /* ---------- Speech recognition ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recog = null, recActive = false;
-function startRecognition(lang, btn) {
+// Dictates into whichever field is asking — the chat composer or a drill.
+function startRecognition(lang, btn, target, onDone) {
   if (!SR) { alert('此瀏覽器不支援語音辨識，請直接打字。\n(Android Chrome 支援度最佳)'); return; }
   if (recActive) { recog && recog.stop(); return; }
+  const field = target || textInput;
   recog = new SR();
   recog.lang = lang; recog.interimResults = true; recog.continuous = false; recog.maxAlternatives = 1;
   let finalText = '';
@@ -1425,13 +1783,16 @@ function startRecognition(lang, btn) {
       const tr = e.results[i][0].transcript;
       if (e.results[i].isFinal) finalText += tr; else interim += tr;
     }
-    textInput.value = (finalText + interim).trim();
+    field.value = (finalText + interim).trim();
   };
   recog.onerror = () => {};
   recog.onend = () => {
     recActive = false; btn.classList.remove('listening');
-    const t = textInput.value.trim();
-    if (t) { textInput.value = ''; textInput.style.height = 'auto'; sendToAI(t); }
+    const t = field.value.trim();
+    if (!t) return;
+    if (onDone) { onDone(t); return; }
+    field.value = ''; field.style.height = 'auto';
+    sendToAI(t);
   };
   recog.start();
 }
@@ -1561,7 +1922,7 @@ async function endSession() {
     .filter(t => !t.hidden && t.text !== 'Please begin the session now.')
     .map(t => {
       const who = t.role === 'user' ? (t.kind === 'zh' ? 'LEARNER (Chinese rescue — IGNORE for scoring)' : 'LEARNER (English)') : 'PARTNER';
-      const tag = (state.mode === 'doc' && t.stage != null) ? `[${STAGES[t.stage].en}] ` : '';
+      const tag = (state.mode === 'doc' && t.stage != null) ? `[${stages()[t.stage].en}] ` : '';
       return `${tag}${who}: ${t.text}`;
     }).join('\n');
 
@@ -1603,7 +1964,7 @@ async function endDocSession(transcript) {
   const a = state.article || {};
   const prompt = `You are a strict but encouraging coach for business English AND for interviewing/questioning skill.
 
-Below is a transcript of a role-played meeting. It is split into stages: ${STAGES.map(s => s.en).join(' → ')}.
+Below is a transcript of a role-played meeting. It is split into stages: ${stages().map(s => s.en).join(' → ')}.
 Evaluate ONLY the lines marked "LEARNER (English)". Ignore "Chinese rescue" lines and PARTNER lines.
 
 The learner had read this material beforehand:
@@ -1618,7 +1979,7 @@ Return ONLY JSON with this exact shape:
   "overallScore": <integer 0-100>,
   "summary": "<2-3 sentence overall summary in English>",
   "summaryZh": "<2-3 sentences in Traditional Chinese: how they did and the one thing to fix first>",
-  "stages": [ { "stage": "<one of: ${STAGES.map(s => s.en).join(' | ')}>", "score": <0-100>, "notes": "<1-2 sentences>", "betterVersion": "<a stronger way they could have delivered this stage, in English>" } ],
+  "stages": [ { "stage": "<one of: ${stages().map(s => s.en).join(' | ')}>", "score": <0-100>, "notes": "<1-2 sentences>", "betterVersion": "<a stronger way they could have delivered this stage, in English>" } ],
   "fluency": { "fillerWords": <integer>, "notes": "<1-2 sentences on pace, hesitation, sentence length>" },
   "corrections": [ { "original": "<learner's phrase>", "improved": "<corrected>", "why": "<short reason>" } ],
   "naturalPhrasing": [ { "original": "<awkward>", "better": "<how a native pro would say it>" } ],
@@ -1760,7 +2121,24 @@ function renderHistory() {
     d.innerHTML = `<div class="top"><span class="title">${esc(item.brief)}</span><span class="score">${item.score ?? '–'}</span></div><div class="meta">${date}</div>${src}`;
     d.onclick = () => {
       state.scenarioBrief = item.brief;
-      if (item.type === 'review' && item.review) {
+      if (item.type === 'drill' && item.drills) {
+        const c = $('feedback-content');
+        c.innerHTML = '';
+        $('btn-practice-again').style.display = 'none';
+        const s = el('div', 'fb-score');
+        s.innerHTML = `<div class="num">${item.score ?? '–'}</div><div class="label">重練平均分</div>`;
+        c.appendChild(s);
+        const d = el('div');
+        item.drills.forEach((x, i) => {
+          const row = el('div', 'stage-result');
+          row.innerHTML =
+            `<div class="head"><span class="name">第 ${i + 1} 題</span><span class="val">${x.score ?? '–'}</span></div>` +
+            `<div class="notes">${esc(x.said)}</div>` +
+            `<div class="better"><b>更好：</b>${esc(x.model || '')}</div>`;
+          d.appendChild(row);
+        });
+        c.appendChild(block('逐題回顧', d));
+      } else if (item.type === 'review' && item.review) {
         renderReview(item.review);
       } else if (item.fb) {
         renderFeedback(item.fb);
@@ -1770,6 +2148,159 @@ function renderHistory() {
     };
     list.appendChild(d);
   });
+}
+
+/* ============================================================
+   PROGRESS — trends, recurring weaknesses, vocabulary bank
+   All computed locally from history: no API calls, works offline, and
+   costs nothing to open as often as you like.
+   ============================================================ */
+function axisAverages(items) {
+  const sum = { english: [0, 0], questioning: [0, 0], structure: [0, 0] };
+  items.forEach(s => {
+    const r = s.review;
+    if (r?.english?.score != null)     { sum.english[0] += r.english.score; sum.english[1]++; }
+    if (r?.questioning?.score != null) { sum.questioning[0] += r.questioning.score; sum.questioning[1]++; }
+    if (r?.structure?.score != null)   { sum.structure[0] += r.structure.score; sum.structure[1]++; }
+    if (s.fb?.questioning?.score != null) { sum.questioning[0] += s.fb.questioning.score; sum.questioning[1]++; }
+  });
+  const avg = (p) => p[1] ? Math.round(p[0] / p[1]) : null;
+  return { english: avg(sum.english), questioning: avg(sum.questioning), structure: avg(sum.structure) };
+}
+
+function vocabBank(items) {
+  const seen = new Map();   // lower-cased key → display form
+  const add = (term, gloss) => {
+    const t = String(term || '').trim();
+    if (!t || t.length > 90) return;
+    const k = t.toLowerCase();
+    if (!seen.has(k)) seen.set(k, { term: t, zh: gloss || '' });
+    else if (gloss && !seen.get(k).zh) seen.get(k).zh = gloss;
+  };
+  items.forEach(s => {
+    (s.article?.glossary || []).forEach(g => add(g.term, g.zh));
+    (s.fb?.vocabulary || []).forEach(v => add(v));
+    (s.fb?.patterns || []).forEach(v => add(v));
+    (s.article?.survivalPhrases || []).forEach(v => add(v));
+  });
+  return [...seen.values()];
+}
+
+function recurringFixes(items) {
+  const tally = new Map();
+  const bump = (why) => {
+    const k = String(why || '').trim().toLowerCase();
+    if (!k || k.length < 4) return;
+    tally.set(k, (tally.get(k) || 0) + 1);
+  };
+  items.forEach(s => {
+    (s.fb?.corrections || []).forEach(c => bump(c.why));
+    (s.review?.english?.corrections || []).forEach(c => bump(c.why));
+  });
+  return [...tally.entries()].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 6);
+}
+
+function recommendation(items, axes) {
+  if (!items.length) return '還沒有紀錄。先做一次「📄 文件情境練習」，用你手上真實的資料開始。';
+  const weakest = Object.entries(axes).filter(([, v]) => v != null).sort((a, b) => a[1] - b[1])[0];
+  const kinds = new Set(items.map(s => s.type));
+  if (!kinds.has('review')) return '你還沒檢討過真實會議。那是進步最快的一步 —— 挑一場錄音或逐字稿丟進「🎧 檢討真實會議」。';
+  if (!kinds.has('drill')) return '你檢討過但還沒重練。到任何一次檢討結果底部按「重練這些時刻」，把發現變成能力。';
+  if (weakest && weakest[1] < 70) {
+    const zh = { english: '英文表達', questioning: '提問深度', structure: '思考架構' }[weakest[0]];
+    return `你最弱的一軸是「${zh}」（${weakest[1]} 分）。今天挑一份相關文件做一次分關卡練習，特別留意這一項。`;
+  }
+  return '三軸都在水準之上。試著把難度調到「進階 Hard」，或換一個你不熟悉的領域。';
+}
+
+function renderProgress() {
+  const c = $('progress-content');
+  const h = store.history;
+  c.innerHTML = '';
+
+  if (!h.length) {
+    c.innerHTML = '<div class="empty">還沒有練習紀錄。做完第一次練習後，這裡會顯示你的進步曲線。</div>';
+    return;
+  }
+
+  const axes = axisAverages(h);
+  const rec = el('div', 'fb-block');
+  rec.appendChild(el('h3', null, '💡 今天練什麼'));
+  rec.appendChild(p(recommendation(h, axes)));
+  c.appendChild(rec);
+
+  // headline numbers
+  const scored = h.filter(s => typeof s.score === 'number');
+  const recent = scored.slice(0, 5);
+  const older = scored.slice(5, 10);
+  const mean = (a) => a.length ? Math.round(a.reduce((s, x) => s + x.score, 0) / a.length) : null;
+  const now = mean(recent), was = mean(older);
+
+  const stats = el('div', 'sub-scores');
+  stats.appendChild(scoreRow('練習次數', h.length));
+  stats.appendChild(scoreRow('近 5 次平均', now ?? '–'));
+  stats.appendChild(scoreRow('與前 5 次比', was == null ? '–' : (now - was >= 0 ? '+' : '') + (now - was)));
+  c.appendChild(stats);
+
+  if (axes.english != null || axes.questioning != null || axes.structure != null) {
+    const a = el('div', 'sub-scores');
+    a.appendChild(scoreRow('英文 English', axes.english ?? '–'));
+    a.appendChild(scoreRow('提問深度', axes.questioning ?? '–'));
+    a.appendChild(scoreRow('思考架構', axes.structure ?? '–'));
+    c.appendChild(a);
+  }
+
+  // trend, oldest → newest so it reads left to right like time
+  if (scored.length > 1) {
+    const bars = el('div', 'trend');
+    scored.slice(0, 20).reverse().forEach(s => {
+      const b = el('div', 'bar');
+      b.style.height = Math.max(6, (s.score || 0) * 0.9) + 'px';
+      b.title = `${s.brief} — ${s.score}`;
+      bars.appendChild(b);
+    });
+    const wrap = el('div');
+    wrap.appendChild(bars);
+    wrap.appendChild(p('最舊 → 最新（最多 20 次）'));
+    c.appendChild(block('分數趨勢 · Trend', wrap));
+  }
+
+  const fixes = recurringFixes(h);
+  if (fixes.length) {
+    const d = el('div');
+    fixes.forEach(([why, n]) => {
+      const row = el('div', 'fb-correction');
+      row.innerHTML = `<span class="now">${esc(why)}</span><span class="why">出現 ${n} 次</span>`;
+      d.appendChild(row);
+    });
+    c.appendChild(block('反覆出現的問題 · Recurring', d));
+  }
+
+  const bank = vocabBank(h);
+  if (bank.length) {
+    const d = el('div');
+    const search = el('input');
+    search.type = 'text';
+    search.placeholder = `搜尋這 ${bank.length} 個詞彙與句型…`;
+    search.style.marginBottom = '10px';
+    const listEl = el('div');
+    const draw = (q) => {
+      const needle = q.trim().toLowerCase();
+      listEl.innerHTML = '';
+      bank.filter(v => !needle || v.term.toLowerCase().includes(needle) || (v.zh || '').includes(needle))
+        .slice(0, 200)
+        .forEach(v => {
+          const row = el('div', 'ref-term');
+          row.innerHTML = `<b>${esc(v.term)}</b>${v.zh ? ' — ' + esc(v.zh) : ''}`;
+          listEl.appendChild(row);
+        });
+    };
+    search.oninput = () => draw(search.value);
+    draw('');
+    d.appendChild(search);
+    d.appendChild(listEl);
+    c.appendChild(block(`單字本 · Vocabulary (${bank.length})`, d));
+  }
 }
 
 /* ============================================================
@@ -1994,7 +2525,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v20';
+const APP_VERSION = 'v21';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

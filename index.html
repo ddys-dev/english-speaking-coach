@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=20" />
+  <link rel="stylesheet" href="styles.css?v=21" />
 </head>
 <body>
   <div id="app">
@@ -53,6 +53,7 @@
         </div>
 
         <div class="home-actions">
+          <button class="ghost-btn" id="btn-progress">📈 進步追蹤 Progress</button>
           <button class="ghost-btn" id="btn-history">📚 練習紀錄 History</button>
         </div>
       </section>
@@ -77,11 +78,18 @@
         </div>
 
         <div class="field" id="custom-field">
-          <label>自訂背景（選填）· Custom context (optional)</label>
-          <textarea id="custom-context" rows="3" placeholder="例：對方是一家做矽光子的美國新創，A 輪，我想評估合作可能。"></textarea>
+          <label id="custom-label">練習對象或主題（選填）</label>
+          <textarea id="custom-context" rows="3" placeholder=""></textarea>
+          <p class="hint" id="custom-hint"></p>
         </div>
 
-        <button class="primary-btn" id="btn-start">開始練習 · Start Session</button>
+        <button class="primary-btn" id="btn-prep">✨ 準備後練習 · Prepare &amp; Practise</button>
+        <p class="hint" style="margin-top:8px">
+          AI 會先生成情境簡介、詞彙、可用句與該問的問題讓你讀，再分四關練習 —— 和文件模式一樣。
+        </p>
+        <p id="prep-status" class="hint" style="margin-top:8px"></p>
+
+        <button class="ghost-btn" id="btn-start" style="margin-top:12px">直接開始對話 · Skip prep</button>
       </section>
 
       <!-- ===== SOURCE: document / URL → generated scenario ===== -->
@@ -261,6 +269,27 @@
         </div>
       </section>
 
+      <!-- ===== DRILL: re-do the moments you fumbled ===== -->
+      <section id="screen-drill" class="screen">
+        <div id="drill-progress" class="stage-bar"></div>
+        <div id="drill-body"></div>
+
+        <div class="composer" id="drill-composer">
+          <textarea id="drill-input" rows="2" placeholder="Say it better this time…"></textarea>
+          <button id="drill-send" class="send-btn" aria-label="Send">➤</button>
+        </div>
+        <div class="mic-row">
+          <button id="drill-mic" class="mic-btn">🎤 Speak English</button>
+          <button id="drill-skip" class="end-btn">跳過這題 · Skip</button>
+        </div>
+      </section>
+
+      <!-- ===== PROGRESS: trends, weaknesses, vocabulary ===== -->
+      <section id="screen-progress" class="screen">
+        <h2 class="section-label">📈 進步追蹤 · Your Progress</h2>
+        <div id="progress-content"></div>
+      </section>
+
       <!-- ===== HISTORY ===== -->
       <section id="screen-history" class="screen">
         <h2 class="section-label">練習紀錄 · History</h2>
@@ -356,6 +385,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

@@ -330,3 +330,25 @@ input[type=range] {
 .ref-sec p { font-size: 13px; line-height: 1.65; color: var(--muted); margin: 0 0 8px; }
 .ref-term { font-size: 13.5px; line-height: 1.6; margin-bottom: 5px; }
 .ref-term b { color: var(--ok); font-weight: 600; }
+
+/* Drills */
+.drill-prompt {
+  font-size: 15px; line-height: 1.6; color: var(--text);
+  border-left: 2px solid var(--rescue); padding: 4px 0 4px 12px; margin: 6px 0 10px;
+}
+.drill-compare .row { display: flex; gap: 10px; margin-bottom: 8px; font-size: 14px; line-height: 1.55; }
+.drill-compare .tag { flex: 0 0 74px; color: var(--muted); font-size: 12px; padding-top: 2px; }
+.drill-compare .val { flex: 1; }
+.drill-compare .val.was { color: var(--muted); }
+.drill-compare .val.now { color: var(--ok); }
+#drill-body .primary-btn, #drill-body .ghost-btn { margin-top: 10px; }
+
+/* Progress trend */
+.trend {
+  display: flex; align-items: flex-end; gap: 3px; height: 96px;
+  padding: 6px 0 4px; overflow-x: auto;
+}
+.trend .bar {
+  flex: 1 0 10px; min-width: 10px; border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+}
