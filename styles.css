@@ -282,3 +282,10 @@ input[type=file]::file-selector-button:active { opacity: .75; }
 .stage-result .notes { font-size: 13.5px; color: var(--muted); line-height: 1.55; margin-top: 3px; }
 .stage-result .better { font-size: 13.5px; line-height: 1.55; margin-top: 5px; color: var(--ok); }
 .stage-result .better b { color: var(--muted); font-weight: 600; }
+
+/* Voice controls */
+input[type=range] {
+  width: 100%; margin: 10px 0 2px; accent-color: var(--accent);
+  background: transparent;
+}
+#rate-label { color: var(--accent); font-weight: 700; }

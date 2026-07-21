@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=15" />
+  <link rel="stylesheet" href="styles.css?v=16" />
 </head>
 <body>
   <div id="app">
@@ -235,6 +235,20 @@
           </label>
         </div>
 
+        <div class="field">
+          <label>🗣 朗讀語音 · Voice</label>
+          <select id="voice-select"></select>
+          <p class="hint">
+            ⭐ 是系統中品質最好的。名稱含 <b>Natural</b> / <b>Neural</b> / <b>Google</b> 的比較自然；
+            Microsoft David / Zira 是舊款合成音，機械感重。
+          </p>
+
+          <label style="margin-top:12px">語速 · Speed <span id="rate-label"></span></label>
+          <input type="range" id="rate-range" min="0.6" max="1.3" step="0.05" />
+
+          <button class="ghost-btn" id="btn-voice-test" style="margin-top:10px">🔊 試聽</button>
+        </div>
+
         <button class="primary-btn" id="btn-save-settings">儲存 · Save</button>
         <p id="settings-saved" class="saved-msg" hidden>已儲存 ✓</p>
 
@@ -279,6 +293,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=16"></script>
 </body>
 </html>

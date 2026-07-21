@@ -10,6 +10,8 @@ const LS = {
   model: 'sp_model',
   tts:   'sp_tts',
   history:'sp_history',
+  voice: 'sp_voice',
+  rate:  'sp_rate',
 };
 const store = {
   get apiKey() { return localStorage.getItem(LS.key) || ''; },
@@ -20,6 +22,10 @@ const store = {
   set model(v) { localStorage.setItem(LS.model, v); },
   get tts()    { return localStorage.getItem(LS.tts) !== 'off'; },
   set tts(v)   { localStorage.setItem(LS.tts, v ? 'on' : 'off'); },
+  get voice()  { return localStorage.getItem(LS.voice) || ''; },
+  set voice(v) { localStorage.setItem(LS.voice, v || ''); },
+  get rate()   { const r = parseFloat(localStorage.getItem(LS.rate)); return r >= 0.5 && r <= 1.5 ? r : 0.95; },
+  set rate(v)  { localStorage.setItem(LS.rate, String(v)); },
   get history(){ try { return JSON.parse(localStorage.getItem(LS.history)) || []; } catch { return []; } },
   set history(v){ localStorage.setItem(LS.history, JSON.stringify(v)); },
 };
@@ -1205,21 +1211,105 @@ $('btn-mic-en').onclick = function () { startRecognition('en-US', this); };
 $('btn-mic-zh').onclick = function () { startRecognition('zh-TW', this); };
 
 /* ---------- Text to speech ---------- */
+/* ---------- Voice selection ----------
+   A machine usually carries several English voices of wildly different
+   quality, and the default is often the oldest one. Prefer the neural
+   voices when they exist. */
+function englishVoices() {
+  if (!('speechSynthesis' in window)) return [];
+  return speechSynthesis.getVoices().filter(v => /^en[-_]/i.test(v.lang || ''));
+}
+function rankVoice(v) {
+  const n = (v.name || '');
+  let s = 0;
+  if (/natural|neural/i.test(n)) s += 100;   // Microsoft/Edge neural voices
+  if (/google/i.test(n)) s += 60;            // Chrome's bundled Google voices
+  if (/online/i.test(n)) s += 20;
+  if (/david|zira|mark|hazel/i.test(n)) s -= 40;  // legacy SAPI voices
+  if (/^en[-_]US/i.test(v.lang)) s += 15;
+  if (v.localService) s += 3;                // no network hiccup mid-sentence
+  return s;
+}
+function bestVoice() {
+  const list = englishVoices();
+  if (!list.length) return null;
+  const saved = store.voice;
+  return list.find(v => v.name === saved) ||
+         [...list].sort((a, b) => rankVoice(b) - rankVoice(a))[0];
+}
+
+function populateVoiceSelect() {
+  const sel = $('voice-select');
+  if (!sel) return;
+  const list = englishVoices();
+  if (!list.length) return;
+  const best = bestVoice();
+  sel.innerHTML = '';
+  [...list].sort((a, b) => rankVoice(b) - rankVoice(a)).forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.name;
+    o.textContent = `${v.name}（${v.lang}）` + (best && v.name === best.name ? ' ⭐' : '');
+    sel.appendChild(o);
+  });
+  sel.value = (store.voice && list.some(v => v.name === store.voice)) ? store.voice : (best ? best.name : '');
+}
+
+if ('speechSynthesis' in window) {
+  // The list is populated asynchronously, and may arrive after first paint.
+  speechSynthesis.addEventListener('voiceschanged', populateVoiceSelect);
+  setTimeout(populateVoiceSelect, 300);
+}
+
+/* Splitting on every "." put breaks inside decimals ("gemini-3.5") and after
+   abbreviations ("e.g.", "Inc."), and each false break became an audible pause
+   in the middle of a phrase. Only break where a sentence genuinely ends. */
+const ABBREV = /(?:^|[\s("'])(?:mr|mrs|ms|dr|prof|sr|jr|st|vs|etc|approx|inc|ltd|corp|co|dept|fig|no|vol|est|al|e\.g|i\.e|u\.s|u\.k)\.$/i;
+
+function splitSentences(text) {
+  const out = [];
+  let cur = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    cur += ch;
+    if (!/[.!?…]/.test(ch)) continue;
+    const prev = text[i - 1] || '';
+    const next = text[i + 1] || '';
+    if (ch === '.' && /\d/.test(prev) && /\d/.test(next)) continue;  // 3.5
+    if (ABBREV.test(cur)) continue;                                   // e.g.
+    if (/[.!?…"')\]]/.test(next)) continue;                           // ?!  ."
+    if (next && !/\s/.test(next)) continue;                           // mid-token
+    out.push(cur.trim());
+    cur = '';
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
-  // Browsers cut long utterances off, so feed it sentence-sized chunks.
-  const chunks = String(text).replace(/\s+/g, ' ').trim().match(/[^.!?]+[.!?]*\s*/g) || [];
+  const voice = bestVoice();
+
+  // Paragraph breaks are real pauses; keep them, and group sentences into
+  // large chunks so the gaps between utterances land only where a speaker
+  // would actually breathe.
   const queue = [];
-  let buf = '';
-  for (const c of chunks) {
-    if ((buf + c).length > 180 && buf) { queue.push(buf.trim()); buf = c; }
-    else buf += c;
-  }
-  if (buf.trim()) queue.push(buf.trim());
-  for (const q of (queue.length ? queue : [String(text)])) {
+  String(text).split(/\n{2,}/).forEach(para => {
+    const clean = para.replace(/[ \t]+/g, ' ').trim();
+    if (!clean) return;
+    let buf = '';
+    splitSentences(clean).forEach(s => {
+      if (buf && (buf + ' ' + s).length > 320) { queue.push(buf); buf = s; }
+      else buf = buf ? buf + ' ' + s : s;
+    });
+    if (buf) queue.push(buf);
+  });
+
+  const rate = store.rate;
+  for (const q of (queue.length ? queue : [String(text).trim()])) {
     const u = new SpeechSynthesisUtterance(q);
-    u.lang = 'en-US'; u.rate = 1.0; u.pitch = 1.0;
+    if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = 'en-US'; }
+    u.rate = rate; u.pitch = 1.0;
     speechSynthesis.speak(u);
   }
 }
@@ -1476,6 +1566,9 @@ function loadSettings() {
   // First run with a key: find out what it can actually run, quietly.
   if (store.apiKey && !known.length) refreshModels().catch(() => {});
   $('tts-toggle').checked = store.tts;
+  populateVoiceSelect();
+  $('rate-range').value = store.rate;
+  $('rate-label').textContent = store.rate.toFixed(2) + '×';
   const c = getSync();
   $('sync-repo').value = c ? `${c.owner}/${c.repo}` : '';
   $('sync-token').value = c ? c.token : '';
@@ -1501,6 +1594,19 @@ $('btn-save-settings').onclick = () => {
   renderHome();
   if (syncEnabled()) syncNow(false);
 };
+/* Voice tuning applies immediately — you judge a voice by hearing it, not by
+   saving a form and starting a session. */
+$('rate-range').oninput = function () {
+  store.rate = parseFloat(this.value);
+  $('rate-label').textContent = store.rate.toFixed(2) + '×';
+};
+$('voice-select').onchange = function () {
+  store.voice = this.value;
+  speak('Thanks for walking me through the roadmap. Before we go further, could you say more about the 3.5 gigawatt figure, e.g. how much of that is already contracted?');
+};
+$('btn-voice-test').onclick = () =>
+  speak('Thanks for walking me through the roadmap. Before we go further, could you say more about the 3.5 gigawatt figure, e.g. how much of that is already contracted?');
+
 /* Probes each configured model directly so a failure names its own cause
    instead of surfacing as a bare status code somewhere downstream. */
 $('btn-test-api').onclick = async () => {
@@ -1660,7 +1766,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
