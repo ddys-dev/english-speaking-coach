@@ -4,8 +4,8 @@ const CACHE = 'speakprep-v9';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css',
-  './app.js',
+  './styles.css?v=9',
+  './app.js?v=9',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
@@ -28,12 +28,31 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+/* The app shell is network-first: a cache-first worker will happily serve a
+   stale app.js forever, which is exactly what stranded the app on an old
+   version. Icons stay cache-first — they don't change. Anything cross-origin
+   (Gemini, GitHub sync) is left entirely alone. */
+const SHELL = /\.(?:html|css|js|webmanifest)$/;
+
 self.addEventListener('fetch', (e) => {
+  if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
-  // Never cache API calls (Gemini + GitHub sync) — always go to network.
-  if (url.hostname.includes('generativelanguage.googleapis.com')) return;
-  if (url.hostname.includes('api.github.com') || url.hostname.includes('raw.githubusercontent.com')) return;
-  e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request).catch(() => caches.match('./index.html')))
-  );
+  if (url.origin !== self.location.origin) return;
+
+  const isShell = e.request.mode === 'navigate' || SHELL.test(url.pathname);
+
+  if (isShell) {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)));
 });

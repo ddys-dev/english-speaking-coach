@@ -10,7 +10,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
-  <link rel="stylesheet" href="styles.css" />
+  <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
+       Without it a cache-first service worker keeps serving the old bundle. -->
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 <body>
   <div id="app">
@@ -277,6 +279,6 @@
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>
