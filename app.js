@@ -339,11 +339,38 @@ async function geminiOnce(model, contents, opts) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(store.apiKey)}`;
   const body = {
     contents,
-    generationConfig: { temperature: opts.temperature ?? 0.85, ...(opts.json ? { responseMimeType: 'application/json' } : {}) },
+    generationConfig: {
+      temperature: opts.temperature ?? 0.85,
+      // The scenario package and the review are long; the default ceiling
+      // truncates them mid-JSON.
+      maxOutputTokens: opts.maxOutputTokens ?? 8192,
+      ...(opts.json ? { responseMimeType: 'application/json' } : {}),
+    },
   };
   if (opts.system) body.system_instruction = { parts: [{ text: opts.system }] };
   if (opts.tools) body.tools = opts.tools;
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  // Without a deadline a stalled request just spins forever with no way to
+  // tell a slow answer from a dead one.
+  const ac = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? 120000;
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: ac.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    if (err.name === 'AbortError') {
+      const e = new Error(`等待超過 ${Math.round(timeoutMs / 1000)} 秒仍沒有回應，已中止。文件很長時可試著縮短內容再來一次。`);
+      e.fatal = true;
+      throw e;
+    }
+    throw err;
+  }
+  clearTimeout(timer);
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     const e = new Error('http');
@@ -355,7 +382,22 @@ async function geminiOnce(model, contents, opts) {
     throw e;
   }
   const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
+  const cand = data?.candidates?.[0];
+  // Thinking models return their reasoning as extra parts flagged thought:true.
+  // Concatenating those corrupts the answer — take only the real output.
+  const text = (cand?.content?.parts || [])
+    .filter(p => p && p.thought !== true && typeof p.text === 'string')
+    .map(p => p.text).join('') || '';
+
+  const finish = cand?.finishReason;
+  if (finish === 'MAX_TOKENS') {
+    const e = new Error('AI 的回覆太長被截斷了。請把文件或貼上的文字縮短一些再試。');
+    e.fatal = true; throw e;
+  }
+  if (finish === 'SAFETY' || finish === 'PROHIBITED_CONTENT') {
+    const e = new Error('內容被 Gemini 的安全機制擋下，請換一份材料試試。');
+    e.fatal = true; throw e;
+  }
   if (!text) throw new Error('AI 沒有回覆，請再試一次。');
   return text.trim();
 }
@@ -582,6 +624,16 @@ async function filePartFor(file, onProgress) {
 
 const MB = (n) => (n / 1048576).toFixed(1) + ' MB';
 
+/* A silent status line is indistinguishable from a hung one. Count the
+   seconds so waiting always looks alive. */
+function startTicker(setText, label) {
+  const t0 = Date.now();
+  const tick = () => setText(`${label}（已等待 ${Math.round((Date.now() - t0) / 1000)} 秒）`);
+  tick();
+  const id = setInterval(tick, 1000);
+  return () => clearInterval(id);
+}
+
 // Gemini can't always be pinned to responseMimeType=json (notably when a tool
 // like url_context is enabled), so accept fenced or chatty replies too.
 function parseJson(raw) {
@@ -591,7 +643,9 @@ function parseJson(raw) {
   if (fence) { try { return JSON.parse(fence[1].trim()); } catch {} }
   const a = s.indexOf('{'), b = s.lastIndexOf('}');
   if (a !== -1 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch {} }
-  throw new Error('AI 回覆的格式無法解析，請再試一次。');
+  // Show what actually came back — "unparseable" alone is undebuggable.
+  const peek = s.slice(0, 160).replace(/\s+/g, ' ');
+  throw new Error(`AI 回覆的格式無法解析，請再試一次。（AI 開頭回了：${peek || '（空白）'}）`);
 }
 
 /* ============================================================
@@ -624,6 +678,11 @@ function initSourceScreen() {
       [...row.children].forEach(x => x.classList.remove('active'));
       p.classList.add('active');
       ['file','url','text'].forEach(k => { $('source-pane-' + k).hidden = k !== t.id; });
+      // A leftover "已選擇：foo.pdf" under the text tab reads as if that file
+      // is still being used.
+      if (t.id !== 'file') $('source-picked').textContent = '';
+      else if (pickedSourceFile) $('source-picked').textContent = `已選擇：${pickedSourceFile.name}（${MB(pickedSourceFile.size)}）`;
+      $('source-status').textContent = '';
     };
     row.appendChild(p);
   });
@@ -667,6 +726,7 @@ async function generateScenario() {
   const parts = [];
   let sourceMeta = null;
   let tools;
+  let stopTick = null;
 
   try {
     if (sourceKind === 'file') {
@@ -702,10 +762,11 @@ Base every fact on the source material — do not invent numbers.
 Return ONLY JSON with this exact shape:
 ${SCENARIO_SHAPE}` });
 
-    status('AI 閱讀中，正在生成情境…');
+    stopTick = startTicker(status, 'AI 閱讀中，正在生成情境…');
     // url_context and forced JSON output don't reliably coexist — when a tool
     // is in play, ask for JSON in the prompt and parse leniently instead.
     const raw = await callGemini([{ role: 'user', parts }], { json: !tools, temperature: 0.5, tools });
+    stopTick(); stopTick = null;
     const pkg = parseJson(raw);
 
     state.mode = 'doc';
@@ -719,6 +780,7 @@ ${SCENARIO_SHAPE}` });
   } catch (e) {
     status('⚠️ ' + e.message);
   } finally {
+    if (stopTick) stopTick();
     $('btn-generate').disabled = false;
   }
 }
@@ -916,6 +978,7 @@ async function runReview() {
   const ctx = $('review-context').value.trim();
   const parts = [];
   let meta = null;
+  let stopTick = null;
 
   try {
     if (reviewKind === 'file') {
@@ -947,8 +1010,9 @@ Write summaryZh in TRADITIONAL Chinese (繁體中文). Everything else in Englis
 Return ONLY JSON with this exact shape:
 ${REVIEW_SHAPE}` });
 
-    status('AI 分析中… 錄音較長時可能需要一兩分鐘。');
-    const raw = await callGemini([{ role: 'user', parts }], { json: true, temperature: 0.35 });
+    stopTick = startTicker(status, 'AI 分析中…（錄音較長時需要數分鐘）');
+    const raw = await callGemini([{ role: 'user', parts }], { json: true, temperature: 0.35, timeoutMs: 300000 });
+    stopTick(); stopTick = null;
     const rv = parseJson(raw);
     status('');
     renderReview(rv);
@@ -957,6 +1021,7 @@ ${REVIEW_SHAPE}` });
   } catch (e) {
     status('⚠️ ' + e.message);
   } finally {
+    if (stopTick) stopTick();
     $('btn-review-start').disabled = false;
   }
 }
@@ -1581,7 +1646,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
