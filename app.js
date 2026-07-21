@@ -12,6 +12,8 @@ const LS = {
   history:'sp_history',
   voice: 'sp_voice',
   rate:  'sp_rate',
+  cards: 'sp_cards',
+  keepFull: 'sp_keep_full',
 };
 const store = {
   get apiKey() { return localStorage.getItem(LS.key) || ''; },
@@ -28,7 +30,131 @@ const store = {
   set rate(v)  { localStorage.setItem(LS.rate, String(v)); },
   get history(){ try { return JSON.parse(localStorage.getItem(LS.history)) || []; } catch { return []; } },
   set history(v){ localStorage.setItem(LS.history, JSON.stringify(v)); },
+  get cards()  { try { const v = JSON.parse(localStorage.getItem(LS.cards)); return Array.isArray(v) ? v : []; } catch { return []; } },
+  set cards(v) { localStorage.setItem(LS.cards, JSON.stringify(v)); },
+  get keepFull(){ return localStorage.getItem(LS.keepFull) === 'on'; },
+  set keepFull(v){ localStorage.setItem(LS.keepFull, v ? 'on' : 'off'); },
 };
+
+/* ============================================================
+   PHRASE BANK
+   A full transcript is dead weight: nobody rereads session 37, and at
+   ~9.5KB each they fill localStorage's 5MB inside 500 sessions. What
+   compounds is the language itself — harvest that into typed, deduplicated
+   cards and keep sessions down to their scores.
+   ============================================================ */
+const CARD_CATS = {
+  intro:    '自我介紹',
+  opening:  '開場',
+  asking:   '提問',
+  probing:  '追問挖深',
+  opinion:  '表達意見',
+  pushback: '反駁與協商',
+  summary:  '總結收尾',
+  travel:   '旅遊救命句',
+  term:     '專業術語',
+  pattern:  '句型與用法',
+  other:    '其他',
+};
+
+// Leitner-style spacing: a card you remember comes back later each time.
+const BOX_DAYS = [0, 1, 3, 7, 21, 60];
+const DAY = 86400000;
+
+const cardKey = (t) => String(t || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+function addCards(items, srcBrief) {
+  if (!items?.length) return 0;
+  const cards = store.cards;
+  const seen = new Set(cards.map(c => cardKey(c.text)));
+  const now = Date.now();
+  let added = 0;
+  items.forEach(it => {
+    const text = String(it.text || '').trim();
+    if (!text || text.length > 300) return;
+    const k = cardKey(text);
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    cards.push({
+      id: 'c_' + now + '_' + Math.random().toString(36).slice(2, 7),
+      text, zh: it.zh || '', cat: CARD_CATS[it.cat] ? it.cat : 'other',
+      star: !!it.star, ts: now, src: srcBrief || '', box: 1, due: now,
+    });
+    added++;
+  });
+  if (added) store.cards = cards.slice(-2000);
+  return added;
+}
+
+/* Pull the reusable language out of a finished session. */
+function harvestCards(s) {
+  const out = [];
+  const push = (text, cat, zh) => { if (text) out.push({ text: String(text), cat, zh }); };
+  const a = s.article || {};
+  (a.glossary || []).forEach(g => push(g.term, 'term', g.zh));
+  (a.openingHints || []).forEach(t => push(t, 'opening'));
+  (a.questionIdeas || []).forEach(t => push(t, 'asking'));
+  (a.survivalPhrases || []).forEach(t => push(t, 'travel'));
+
+  const fb = s.fb || {};
+  (fb.vocabulary || []).forEach(t => push(t, 'term'));
+  (fb.patterns || []).forEach(t => push(t, 'pattern'));
+  (fb.naturalPhrasing || []).forEach(x => push(x.better, 'pattern'));
+  (fb.corrections || []).forEach(x => push(x.improved, 'pattern'));
+  (fb.questioning?.betterQuestions || []).forEach(x => push(x.ask, 'probing'));
+
+  const rv = s.review || {};
+  (rv.english?.naturalPhrasing || []).forEach(x => push(x.better, 'pattern'));
+  (rv.english?.corrections || []).forEach(x => push(x.improved, 'pattern'));
+  (rv.questioning?.betterQuestions || []).forEach(x => push(x.ask, 'probing'));
+  (rv.questioning?.missedOpportunities || []).forEach(x => push(x.shouldHaveAsked, 'probing'));
+
+  (s.drills || []).forEach(d => push(d.model, 'probing'));
+  return out;
+}
+
+/* Keep what the trend needs; drop the prose that will never be reread. */
+function slimSession(s) {
+  if (store.keepFull) return s;
+  const slim = {
+    id: s.id, ts: s.ts, updatedAt: s.updatedAt, type: s.type,
+    brief: s.brief, score: s.score,
+    digest: s.fb?.summaryZh || s.review?.summaryZh || s.article?.summaryZh || '',
+  };
+  if (s.source?.name) slim.source = { kind: s.source.kind, name: s.source.name };
+  if (s.difficulty) slim.difficulty = s.difficulty;
+  const ax = {};
+  if (s.review?.english?.score != null)     ax.english = s.review.english.score;
+  if (s.review?.questioning?.score != null) ax.questioning = s.review.questioning.score;
+  if (s.review?.structure?.score != null)   ax.structure = s.review.structure.score;
+  if (s.fb?.questioning?.score != null)     ax.questioning = s.fb.questioning.score;
+  if (Object.keys(ax).length) slim.axes = ax;
+  // Recurring-weakness detection needs the reasons, not the whole correction.
+  const why = [
+    ...(s.fb?.corrections || []).map(c => c.why),
+    ...(s.review?.english?.corrections || []).map(c => c.why),
+  ].filter(Boolean).slice(0, 8);
+  if (why.length) slim.why = why;
+  return slim;
+}
+
+// Harvest the language first, then file the slim record.
+function fileSession(session) {
+  addCards(harvestCards(session), session.brief);
+  const h = store.history;
+  h.unshift(slimSession(session));
+  store.history = h.slice(0, 500);
+  if (syncEnabled()) syncNow(true);
+}
+
+/* Existing records were stored whole, before any of this existed. */
+function migrateHistory() {
+  const h = store.history;
+  if (!h.length || store.keepFull) return;
+  if (!h.some(s => s.article || s.fb || s.review)) return;
+  h.forEach(s => addCards(harvestCards(s), s.brief));
+  store.history = h.map(slimSession);
+}
 
 /* ---------- Scenario data ---------- */
 const CATEGORIES = {
@@ -123,7 +249,7 @@ const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) 
 const hasCJK = (s) => /[㐀-龿]/.test(s);
 
 /* ---------- Screen navigation ---------- */
-const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','progress','history','settings'];
+const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','cards','recall','intro','progress','history','settings'];
 function show(name, push = true) {
   SCREENS.forEach(s => $('screen-' + s).classList.toggle('active', s === name));
   if (push && state.screenStack[state.screenStack.length - 1] !== name) state.screenStack.push(name);
@@ -1700,16 +1826,13 @@ function renderDrillSummary() {
 
 function saveDrillHistory(avg) {
   const now = Date.now();
-  const h = store.history;
-  h.unshift({
+  fileSession({
     id: 'd_' + now + '_' + Math.random().toString(36).slice(2, 7),
     ts: now, updatedAt: now, type: 'drill',
     brief: `🎯 重練 · ${state.drillResults.length} 題`,
     score: avg,
     drills: state.drillResults.map(r => ({ prompt: r.drill.prompt, said: r.said, score: r.res.score, model: r.res.modelAnswer })),
   });
-  store.history = h.slice(0, 500);
-  if (syncEnabled()) syncNow(true);
 }
 
 $('drill-send').onclick = () => submitDrill();
@@ -1721,8 +1844,7 @@ $('drill-mic').onclick = function () { startRecognition('en-US', this, $('drill-
 
 function saveReviewHistory(rv, meta) {
   const now = Date.now();
-  const h = store.history;
-  h.unshift({
+  fileSession({
     id: 'r_' + now + '_' + Math.random().toString(36).slice(2, 7),
     ts: now,
     updatedAt: now,
@@ -1732,8 +1854,6 @@ function saveReviewHistory(rv, meta) {
     source: meta,
     review: rv,
   });
-  store.history = h.slice(0, 500);
-  if (syncEnabled()) syncNow(true);
 }
 
 /* ---------- Wiring for the new screens ---------- */
@@ -2091,8 +2211,7 @@ $('btn-home').onclick = () => { show('home'); };
    ============================================================ */
 function saveHistory(fb) {
   const now = Date.now();
-  const h = store.history;
-  h.unshift({
+  fileSession({
     id: 's_' + now + '_' + Math.random().toString(36).slice(2, 7),
     ts: now,
     updatedAt: now,
@@ -2100,14 +2219,10 @@ function saveHistory(fb) {
     brief: state.scenarioBrief,
     difficulty: state.difficulty,
     score: fb.overallScore,
-    // The learner asked for uploaded material to be kept, so the generated
-    // scenario travels with the session (and syncs to their PRIVATE repo).
     source: state.mode === 'doc' ? state.source : null,
     article: state.mode === 'doc' ? state.article : null,
     fb,
   });
-  store.history = h.slice(0, 500);
-  if (syncEnabled()) syncNow(true);
 }
 function renderHistory() {
   const list = $('history-list');
@@ -2155,35 +2270,23 @@ function renderHistory() {
    All computed locally from history: no API calls, works offline, and
    costs nothing to open as often as you like.
    ============================================================ */
+// Reads both slimmed records (axes) and any full ones kept by choice.
 function axisAverages(items) {
   const sum = { english: [0, 0], questioning: [0, 0], structure: [0, 0] };
+  const take = (k, v) => { if (v != null) { sum[k][0] += v; sum[k][1]++; } };
   items.forEach(s => {
-    const r = s.review;
-    if (r?.english?.score != null)     { sum.english[0] += r.english.score; sum.english[1]++; }
-    if (r?.questioning?.score != null) { sum.questioning[0] += r.questioning.score; sum.questioning[1]++; }
-    if (r?.structure?.score != null)   { sum.structure[0] += r.structure.score; sum.structure[1]++; }
-    if (s.fb?.questioning?.score != null) { sum.questioning[0] += s.fb.questioning.score; sum.questioning[1]++; }
+    if (s.axes) {
+      take('english', s.axes.english);
+      take('questioning', s.axes.questioning);
+      take('structure', s.axes.structure);
+      return;
+    }
+    take('english', s.review?.english?.score);
+    take('questioning', s.review?.questioning?.score ?? s.fb?.questioning?.score);
+    take('structure', s.review?.structure?.score);
   });
   const avg = (p) => p[1] ? Math.round(p[0] / p[1]) : null;
   return { english: avg(sum.english), questioning: avg(sum.questioning), structure: avg(sum.structure) };
-}
-
-function vocabBank(items) {
-  const seen = new Map();   // lower-cased key → display form
-  const add = (term, gloss) => {
-    const t = String(term || '').trim();
-    if (!t || t.length > 90) return;
-    const k = t.toLowerCase();
-    if (!seen.has(k)) seen.set(k, { term: t, zh: gloss || '' });
-    else if (gloss && !seen.get(k).zh) seen.get(k).zh = gloss;
-  };
-  items.forEach(s => {
-    (s.article?.glossary || []).forEach(g => add(g.term, g.zh));
-    (s.fb?.vocabulary || []).forEach(v => add(v));
-    (s.fb?.patterns || []).forEach(v => add(v));
-    (s.article?.survivalPhrases || []).forEach(v => add(v));
-  });
-  return [...seen.values()];
 }
 
 function recurringFixes(items) {
@@ -2194,6 +2297,7 @@ function recurringFixes(items) {
     tally.set(k, (tally.get(k) || 0) + 1);
   };
   items.forEach(s => {
+    (s.why || []).forEach(bump);
     (s.fb?.corrections || []).forEach(c => bump(c.why));
     (s.review?.english?.corrections || []).forEach(c => bump(c.why));
   });
@@ -2276,31 +2380,246 @@ function renderProgress() {
     c.appendChild(block('反覆出現的問題 · Recurring', d));
   }
 
-  const bank = vocabBank(h);
-  if (bank.length) {
+  const cards = store.cards;
+  if (cards.length) {
     const d = el('div');
-    const search = el('input');
-    search.type = 'text';
-    search.placeholder = `搜尋這 ${bank.length} 個詞彙與句型…`;
-    search.style.marginBottom = '10px';
-    const listEl = el('div');
-    const draw = (q) => {
-      const needle = q.trim().toLowerCase();
-      listEl.innerHTML = '';
-      bank.filter(v => !needle || v.term.toLowerCase().includes(needle) || (v.zh || '').includes(needle))
-        .slice(0, 200)
-        .forEach(v => {
-          const row = el('div', 'ref-term');
-          row.innerHTML = `<b>${esc(v.term)}</b>${v.zh ? ' — ' + esc(v.zh) : ''}`;
-          listEl.appendChild(row);
-        });
-    };
-    search.oninput = () => draw(search.value);
-    draw('');
-    d.appendChild(search);
-    d.appendChild(listEl);
-    c.appendChild(block(`單字本 · Vocabulary (${bank.length})`, d));
+    const due = cards.filter(x => (x.due || 0) <= Date.now()).length;
+    d.appendChild(p(`語料庫已累積 <b>${cards.length}</b> 張，其中 <b>${cards.filter(x => x.star).length}</b> 張標為必備。`, true));
+    const b = el('button', 'primary-btn', due ? `🔁 今日複習（${due} 張到期）` : '📇 打開語料庫');
+    b.onclick = () => (due ? startRecall() : (renderCards(), show('cards')));
+    d.appendChild(b);
+    c.appendChild(block('語料庫 · Phrase Bank', d));
   }
+}
+
+/* ============================================================
+   PHRASE BANK UI · RECALL · SELF-INTRODUCTION
+   ============================================================ */
+let cardFilter = 'all';
+
+function renderCards() {
+  const wrap = $('cards-list');
+  const cards = store.cards;
+  const q = $('card-search').value.trim().toLowerCase();
+
+  const row = $('card-cats');
+  row.innerHTML = '';
+  const counts = { all: cards.length, star: cards.filter(c => c.star).length };
+  Object.keys(CARD_CATS).forEach(k => { counts[k] = cards.filter(c => c.cat === k).length; });
+  const tabs = [['all', '全部'], ['star', '⭐ 必備'],
+    ...Object.entries(CARD_CATS).filter(([k]) => counts[k])];
+  tabs.forEach(([k, label]) => {
+    const p = el('button', 'pill' + (k === cardFilter ? ' active' : ''), `${label} ${counts[k] || 0}`);
+    p.onclick = () => { cardFilter = k; renderCards(); };
+    row.appendChild(p);
+  });
+
+  const shown = cards
+    .filter(c => cardFilter === 'all' || (cardFilter === 'star' ? c.star : c.cat === cardFilter))
+    .filter(c => !q || c.text.toLowerCase().includes(q) || (c.zh || '').includes(q))
+    .sort((a, b) => (b.star - a.star) || (b.ts - a.ts));
+
+  wrap.innerHTML = '';
+  if (!shown.length) {
+    wrap.innerHTML = '<div class="empty">這個分類還沒有內容。做幾次練習就會自動累積。</div>';
+    return;
+  }
+
+  shown.slice(0, 300).forEach(c => {
+    const d = el('div', 'card-item' + (c.star ? ' starred' : ''));
+    const main = el('div', 'card-main');
+    main.appendChild(el('div', 'card-text', c.text));
+    if (c.zh) main.appendChild(el('div', 'card-zh', c.zh));
+    main.appendChild(el('div', 'card-meta', `${CARD_CATS[c.cat] || '其他'}${c.src ? ' · ' + c.src : ''}`));
+    d.appendChild(main);
+
+    const acts = el('div', 'card-acts');
+    const star = el('button', 'card-btn', c.star ? '⭐' : '☆');
+    star.title = '標為必備';
+    star.onclick = () => {
+      const all = store.cards;
+      const t = all.find(x => x.id === c.id);
+      if (t) { t.star = !t.star; store.cards = all; renderCards(); }
+    };
+    const say = el('button', 'card-btn', '🔊');
+    say.onclick = () => speak(c.text);
+    const del = el('button', 'card-btn', '🗑');
+    del.onclick = () => {
+      if (!confirm('刪除這張卡？')) return;
+      store.cards = store.cards.filter(x => x.id !== c.id);
+      renderCards();
+    };
+    acts.append(star, say, del);
+    d.appendChild(acts);
+    wrap.appendChild(d);
+  });
+}
+
+$('card-search').oninput = () => renderCards();
+$('btn-cards').onclick = () => { renderCards(); show('cards'); };
+$('btn-card-add').onclick = () => {
+  const text = prompt('要記住的英文句子或詞彙：');
+  if (!text) return;
+  const zh = prompt('中文說明（可留白）：') || '';
+  addCards([{ text, zh, cat: 'other', star: true }], '手動新增');
+  renderCards();
+};
+
+/* ---------- Recall ----------
+   A phrase bank nobody revisits is a graveyard. Show what is due, make them
+   say it aloud, and space the next showing by how well it went. */
+let recallQueue = [], recallAt = 0, recallShown = false;
+
+function startRecall() {
+  const now = Date.now();
+  const due = store.cards.filter(c => (c.due || 0) <= now);
+  if (!due.length) {
+    alert('目前沒有到期的卡片。\n\n複習是有間隔的：記得的卡片會隔更久才再出現。');
+    renderCards(); show('cards'); return;
+  }
+  // Starred first, then whatever has waited longest.
+  recallQueue = due.sort((a, b) => (b.star - a.star) || ((a.due || 0) - (b.due || 0))).slice(0, 20);
+  recallAt = 0;
+  renderRecall();
+  show('recall');
+}
+
+function renderRecall() {
+  const bar = $('recall-progress');
+  const body = $('recall-body');
+  bar.innerHTML = '';
+  recallQueue.forEach((_, i) => {
+    bar.appendChild(el('span', 'stage-chip ' + (i < recallAt ? 'done' : i === recallAt ? 'current' : ''), String(i + 1)));
+  });
+
+  body.innerHTML = '';
+  const c = recallQueue[recallAt];
+  if (!c) {
+    const done = el('div', 'fb-block');
+    done.appendChild(el('h3', null, '複習完成 🎉'));
+    done.appendChild(p(`這輪複習了 ${recallQueue.length} 張。記得的會隔更久再出現，忘記的明天見。`));
+    const b = el('button', 'primary-btn', '回語料庫');
+    b.onclick = () => { renderCards(); show('cards'); };
+    done.appendChild(b);
+    body.appendChild(done);
+    return;
+  }
+
+  recallShown = false;
+  const card = el('div', 'fb-block recall-card');
+  card.appendChild(el('div', 'card-meta', `${CARD_CATS[c.cat] || ''}${c.star ? ' · ⭐ 必備' : ''}`));
+  // Prompt with the Chinese where there is one, so recall is active not passive.
+  card.appendChild(el('div', 'recall-prompt', c.zh || '(想想這句英文怎麼說)'));
+  const answer = el('div', 'recall-answer', c.text);
+  answer.hidden = true;
+  card.appendChild(answer);
+  body.appendChild(card);
+
+  const reveal = el('button', 'primary-btn', '看答案 · Reveal');
+  reveal.onclick = () => {
+    answer.hidden = false;
+    recallShown = true;
+    reveal.hidden = true;
+    speak(c.text);
+    grade.hidden = false;
+  };
+  body.appendChild(reveal);
+
+  const grade = el('div', 'live-actions');
+  grade.hidden = true;
+  grade.style.marginTop = '10px';
+  const ok = el('button', 'primary-btn', '✅ 記得');
+  ok.onclick = () => gradeCard(c, true);
+  const no = el('button', 'ghost-btn', '❌ 忘了');
+  no.onclick = () => gradeCard(c, false);
+  const say = el('button', 'ghost-btn', '🔊 再聽');
+  say.onclick = () => speak(c.text);
+  grade.append(ok, no, say);
+  body.appendChild(grade);
+  window.scrollTo(0, 0);
+}
+
+function gradeCard(c, remembered) {
+  const all = store.cards;
+  const t = all.find(x => x.id === c.id);
+  if (t) {
+    t.box = remembered ? Math.min((t.box || 1) + 1, BOX_DAYS.length - 1) : 1;
+    t.due = Date.now() + BOX_DAYS[t.box] * DAY;
+    store.cards = all;
+  }
+  recallAt++;
+  renderRecall();
+}
+
+$('btn-recall').onclick = () => startRecall();
+
+/* ---------- Self-introduction ----------
+   The one piece of English you will say in every single meeting. Worth
+   polishing once and owning outright. */
+$('btn-intro').onclick = () => { $('intro-status').textContent = ''; $('intro-result').innerHTML = ''; show('intro'); };
+
+$('btn-intro-make').onclick = async () => {
+  const raw = $('intro-input').value.trim();
+  if (raw.length < 10) { $('intro-status').textContent = '⚠️ 請先寫幾句你想表達的內容。'; return; }
+  if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+
+  let stop = null;
+  const status = (t) => { $('intro-status').textContent = t; };
+  try {
+    $('btn-intro-make').disabled = true;
+    stop = startTicker(status, 'AI 打磨中…');
+    const out = await callGemini([{ role: 'user', parts: [{ text:
+`A non-native English speaker who works in corporate strategy and investment wrote this rough description of themselves. It may be in Chinese.
+
+"${raw}"
+
+Turn it into a self-introduction they can actually say out loud in a business meeting. Natural spoken English, first person, no jargon they would not use themselves, nothing invented beyond what they wrote.
+
+Return ONLY JSON:
+{
+  "oneLiner": "<a single sentence for a quick round of introductions>",
+  "short": "<about 30 seconds spoken — 3-4 sentences>",
+  "long": "<about 60 seconds spoken — who you are, what you look for, why you are in this meeting>",
+  "tips": ["<a short note in Traditional Chinese on delivery: what to stress, what to slow down on>"]
+}` }] }], { json: true, temperature: 0.6, timeoutMs: 120000 });
+    stop(); stop = null;
+    const r = parseJson(out);
+    status('');
+    renderIntro(r);
+  } catch (e) {
+    status('⚠️ ' + e.message);
+  } finally {
+    if (stop) stop();
+    $('btn-intro-make').disabled = false;
+  }
+};
+
+function renderIntro(r) {
+  const c = $('intro-result');
+  c.innerHTML = '';
+  const versions = [
+    ['一句話版 · One-liner', r.oneLiner],
+    ['30 秒版 · Short', r.short],
+    ['60 秒版 · Full', r.long],
+  ];
+  versions.forEach(([title, text]) => {
+    if (!text) return;
+    const d = el('div');
+    d.appendChild(p(text));
+    const acts = el('div', 'live-actions');
+    const say = el('button', 'ghost-btn', '🔊 聽一次');
+    say.onclick = () => speak(text);
+    const keep = el('button', 'primary-btn', '⭐ 存成必備');
+    keep.onclick = () => {
+      addCards([{ text, zh: title, cat: 'intro', star: true }], '自我介紹');
+      keep.textContent = '已存入 ✓';
+      keep.disabled = true;
+    };
+    acts.append(keep, say);
+    d.appendChild(acts);
+    c.appendChild(block(title, d));
+  });
+  if (r.tips?.length) c.appendChild(block('講的時候注意 · Delivery', list(r.tips)));
 }
 
 /* ============================================================
@@ -2325,6 +2644,7 @@ function loadSettings() {
   // First run with a key: find out what it can actually run, quietly.
   if (store.apiKey && !known.length) refreshModels().catch(() => {});
   $('tts-toggle').checked = store.tts;
+  $('keepfull-toggle').checked = store.keepFull;
   populateVoiceSelect();
   $('rate-range').value = store.rate;
   $('rate-label').textContent = store.rate.toFixed(2) + '×';
@@ -2339,6 +2659,7 @@ $('btn-save-settings').onclick = () => {
   if (keyChanged && store.apiKey) { setCachedModels([]); refreshModels().catch(() => {}); }
   store.model = $('model-select').value;
   store.tts = $('tts-toggle').checked;
+  store.keepFull = $('keepfull-toggle').checked;
   // cloud sync config
   const repo = $('sync-repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
   const token = $('sync-token').value.trim();
@@ -2517,6 +2838,7 @@ $('btn-sync-now').onclick = () => syncNow(false);
 /* ============================================================
    INIT
    ============================================================ */
+migrateHistory();
 renderHome();
 loadSettings();
 show('home', false);
@@ -2525,7 +2847,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v21';
+const APP_VERSION = 'v22';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

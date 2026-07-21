@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=21" />
+  <link rel="stylesheet" href="styles.css?v=22" />
 </head>
 <body>
   <div id="app">
@@ -53,6 +53,7 @@
         </div>
 
         <div class="home-actions">
+          <button class="ghost-btn" id="btn-cards">📇 語料庫 Phrase Bank</button>
           <button class="ghost-btn" id="btn-progress">📈 進步追蹤 Progress</button>
           <button class="ghost-btn" id="btn-history">📚 練習紀錄 History</button>
         </div>
@@ -290,6 +291,53 @@
         <div id="progress-content"></div>
       </section>
 
+      <!-- ===== PHRASE BANK ===== -->
+      <section id="screen-cards" class="screen">
+        <h2 class="section-label">📇 語料庫 · Phrase Bank</h2>
+        <p class="hint" style="margin:-4px 0 12px">
+          每次練習自動抽出可重複使用的語言。⭐ 標為<b>必備</b>的會優先出現在複習裡。
+        </p>
+
+        <div class="field">
+          <div class="live-actions">
+            <button class="primary-btn" id="btn-recall">🔁 今日複習</button>
+            <button class="ghost-btn" id="btn-intro">✍️ 打造自我介紹</button>
+            <button class="ghost-btn" id="btn-card-add">➕ 手動新增</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <input type="text" id="card-search" placeholder="搜尋…" autocomplete="off" />
+          <div class="pill-row" id="card-cats" style="margin-top:10px"></div>
+        </div>
+
+        <div id="cards-list"></div>
+      </section>
+
+      <!-- ===== RECALL: spaced repetition ===== -->
+      <section id="screen-recall" class="screen">
+        <div id="recall-progress" class="stage-bar"></div>
+        <div id="recall-body"></div>
+      </section>
+
+      <!-- ===== SELF-INTRODUCTION ===== -->
+      <section id="screen-intro" class="screen">
+        <h2 class="section-label">✍️ 打造我的自我介紹 · Your Introduction</h2>
+        <p class="hint" style="margin:-4px 0 14px">
+          自我介紹是你每場會議都要講的固定資產，值得一次打磨到滾瓜爛熟。
+          用中文寫個大概就行，AI 會產出三種長度的英文版本。
+        </p>
+
+        <div class="field">
+          <label>你想講什麼？（中文、破英文都可以）</label>
+          <textarea id="intro-input" rows="5" placeholder="例：我在鴻海策略投資部門，負責找光通訊、散熱、先進封裝的標的，也談合作。我今天想了解貴公司的技術和量產進度。"></textarea>
+        </div>
+
+        <button class="primary-btn" id="btn-intro-make">生成三種版本 · Generate</button>
+        <p id="intro-status" class="hint" style="margin-top:10px"></p>
+        <div id="intro-result"></div>
+      </section>
+
       <!-- ===== HISTORY ===== -->
       <section id="screen-history" class="screen">
         <h2 class="section-label">練習紀錄 · History</h2>
@@ -341,6 +389,19 @@
           <button class="ghost-btn" id="btn-voice-test" style="margin-top:10px">🔊 試聽</button>
         </div>
 
+        <div class="field">
+          <label>保留完整練習內容 · Keep full records</label>
+          <label class="switch">
+            <input type="checkbox" id="keepfull-toggle" />
+            <span class="slider"></span>
+          </label>
+          <p class="hint">
+            預設關閉：練習結束後只保留分數與摘要，可重複使用的語言則抽進<b>語料庫</b>。
+            開啟會連原文與完整回饋一起存 —— 內容更完整，但一次約 10 KB，
+            瀏覽器上限約 5 MB，累積幾百次就會滿。
+          </p>
+        </div>
+
         <button class="primary-btn" id="btn-save-settings">儲存 · Save</button>
         <p id="settings-saved" class="saved-msg" hidden>已儲存 ✓</p>
 
@@ -385,6 +446,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>
