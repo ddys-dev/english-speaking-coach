@@ -227,7 +227,13 @@ async function geminiOnce(model, contents, opts) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
-    const e = new Error('http'); e.status = res.status; e.body = errText; throw e;
+    const e = new Error('http');
+    e.status = res.status;
+    e.body = errText;
+    e.model = model;
+    // Google explains itself in the body — surface it instead of a bare code.
+    try { e.detail = JSON.parse(errText)?.error?.message || ''; } catch { e.detail = errText.slice(0, 300); }
+    throw e;
   }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
@@ -261,8 +267,15 @@ async function callGemini(contents, opts = {}) {
     // primary exhausted → loop tries FALLBACK_MODEL next
   }
   const st = lastErr && lastErr.status;
-  if (st === 429) throw new Error('已達免費額度上限，請稍後再試。');
-  throw new Error('伺服器忙碌中，已自動重試仍失敗，請稍後再試' + (st ? ' (' + st + ')' : ''));
+  const detail = (lastErr && lastErr.detail) ? '：' + lastErr.detail : '';
+  if (st === 429) throw new Error('已達免費額度上限，請稍後再試。' + detail);
+  if (st === 404) {
+    throw new Error(
+      `找不到模型「${(lastErr && lastErr.model) || store.model}」，你的金鑰可能不支援它。` +
+      `請到 ⚙ 設定把模型改成 gemini-2.5-flash${detail}`);
+  }
+  if (st === 400) throw new Error('請求被拒絕' + (detail || '：請確認檔案格式與大小。'));
+  throw new Error('伺服器忙碌中，已自動重試仍失敗，請稍後再試' + (st ? ' (' + st + ')' : '') + detail);
 }
 
 function startSession() {
@@ -1248,6 +1261,35 @@ $('btn-save-settings').onclick = () => {
   renderHome();
   if (syncEnabled()) syncNow(false);
 };
+/* Probes each configured model directly so a failure names its own cause
+   instead of surfacing as a bare status code somewhere downstream. */
+$('btn-test-api').onclick = async () => {
+  const out = $('api-test-status');
+  const key = $('apikey-input').value.trim() || store.apiKey;
+  if (!key) { out.textContent = '⚠️ 尚未填入金鑰。'; return; }
+
+  const chosen = $('model-select').value;
+  const models = chosen === FALLBACK_MODEL ? [chosen] : [chosen, FALLBACK_MODEL];
+  out.textContent = '測試中…';
+  const lines = [];
+
+  for (const m of models) {
+    try {
+      const res = await fetch(
+        `${GEN_BASE}/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Reply with the single word: OK' }] }] }) });
+      if (res.ok) { lines.push(`✅ ${m}：可用`); continue; }
+      const body = await res.text().catch(() => '');
+      let msg = ''; try { msg = JSON.parse(body)?.error?.message || ''; } catch { msg = body.slice(0, 200); }
+      lines.push(`❌ ${m}：HTTP ${res.status}${msg ? ' — ' + msg : ''}`);
+    } catch (e) {
+      lines.push(`❌ ${m}：無法連線 — ${e.message}`);
+    }
+  }
+  out.innerHTML = lines.map(esc).join('<br>');
+};
+
 $('btn-clear-history').onclick = () => {
   if (confirm('確定要清除所有練習紀錄嗎？此動作無法復原。')) {
     const now = Date.now(); const d = getDeleted();
@@ -1356,7 +1398,7 @@ state.screenStack = ['home'];
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
