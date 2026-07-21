@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=17" />
+  <link rel="stylesheet" href="styles.css?v=18" />
 </head>
 <body>
   <div id="app">
@@ -148,9 +148,14 @@
         <div class="field">
           <label>① 取得指令檔</label>
           <div class="live-actions">
-            <button class="primary-btn" id="btn-live-download">⬇️ 下載指令檔</button>
-            <button class="ghost-btn" id="btn-live-copy">📋 複製全部文字</button>
+            <button class="primary-btn" id="btn-live-share">📤 分享到 Gemini</button>
+            <button class="ghost-btn" id="btn-live-download">⬇️ 下載指令檔</button>
+            <button class="ghost-btn" id="btn-live-copy">📋 複製文字</button>
           </div>
+          <p class="hint" style="margin-top:8px">
+            手機按「分享到 Gemini」會跳出系統選單，直接選 Gemini 就好。
+            電腦上多半沒有分享選單，改用「下載」或「複製」。
+          </p>
           <p id="live-copy-status" class="hint" style="margin-top:8px"></p>
         </div>
 
@@ -339,6 +344,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=17"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

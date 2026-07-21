@@ -926,18 +926,54 @@ function showLiveBrief() {
   if (!state.article) { alert('請先生成一份情境。'); return; }
   $('live-brief').value = buildLiveBrief();
   $('live-copy-status').textContent = '';
+
+  // Lead with whichever route this device actually supports.
+  const canShare = typeof navigator.share === 'function';
+  $('btn-live-share').hidden = !canShare;
+  $('btn-live-download').className = canShare ? 'ghost-btn' : 'primary-btn';
+
   show('live');
 }
 
-function downloadLiveBrief() {
+function briefFilename() {
   const a = state.article || {};
   const safe = String(a.titleZh || a.title || 'practice')
     .replace(/[\\/:*?"<>|]/g, '').slice(0, 40).trim() || 'practice';
+  return `SpeakPrep 練習指令 - ${safe}.md`;
+}
+
+/* On a phone the natural move is the system share sheet — tap once, pick
+   Gemini. Desktop browsers mostly lack it, so fall back to downloading. */
+async function shareLiveBrief() {
+  const text = buildLiveBrief();
+  const status = $('live-copy-status');
+  try {
+    const file = new File([text], briefFilename(), { type: 'text/markdown' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'SpeakPrep 練習指令' });
+      status.textContent = '已分享 ✓ 在 Gemini 開啟後，切到語音模式說 "Let\'s start."';
+      return;
+    }
+    if (navigator.share) {
+      await navigator.share({ title: 'SpeakPrep 練習指令', text });
+      status.textContent = '已分享 ✓ 在 Gemini 貼上後，切到語音模式說 "Let\'s start."';
+      return;
+    }
+    status.textContent = '這個瀏覽器沒有分享功能，已改為下載。';
+    downloadLiveBrief();
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;   // user backed out of the sheet
+    status.textContent = '分享失敗，已改為下載：' + (e?.message || '');
+    downloadLiveBrief();
+  }
+}
+
+function downloadLiveBrief() {
   const blob = new Blob([buildLiveBrief()], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `SpeakPrep 練習指令 - ${safe}.md`;
+  link.download = briefFilename();
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1274,6 +1310,7 @@ $('card-review').onclick = () => initReviewScreen();
 $('btn-generate').onclick = () => generateScenario();
 $('btn-start-stages').onclick = () => startStagedSession();
 $('btn-live-brief').onclick = () => showLiveBrief();
+$('btn-live-share').onclick = () => shareLiveBrief();
 $('btn-live-download').onclick = () => downloadLiveBrief();
 $('btn-live-copy').onclick = () => copyLiveBrief();
 $('btn-live-to-review').onclick = () => { initReviewScreen(); document.querySelectorAll('#review-tabs .pill')[1]?.click(); };
@@ -1879,7 +1916,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v17';
+const APP_VERSION = 'v18';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
