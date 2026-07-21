@@ -1398,7 +1398,7 @@ state.screenStack = ['home'];
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
@@ -1421,8 +1421,15 @@ const APP_VERSION = 'v8';
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(regs.map((r) => r.unregister()));
       }
+      // Clearing the SW cache is not enough: index.html would reload fresh but
+      // still pull app.js/styles.css out of the browser's own HTTP cache, so the
+      // page comes back on the old version. Force-revalidate each asset first.
+      if (status) status.textContent = '正在重新下載程式檔…';
+      await Promise.all(
+        ['index.html', 'app.js', 'styles.css', 'sw.js', 'manifest.webmanifest']
+          .map((f) => fetch(f + '?v=' + Date.now(), { cache: 'reload' }).catch(() => {}))
+      );
     } catch (e) {}
-    // cache-bust the reload so the browser cannot serve a stale index.html
     location.replace(location.pathname + '?v=' + Date.now());
   };
 })();
