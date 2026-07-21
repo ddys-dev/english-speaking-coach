@@ -406,7 +406,12 @@ async function geminiOnce(model, contents, opts) {
 // to a lighter model if the chosen one stays overloaded.
 async function callGemini(contents, opts = {}) {
   const primary = store.model || fallbackModel();
-  const models = [...new Set([primary, fallbackModel()])];
+  // Line up several alternatives: when a model is simply overloaded, moving
+  // to the next-best one beats hammering the busy one and giving up.
+  const ranked = [...usableModels(cachedModels())].sort((a, b) => rankModel(b) - rankModel(a));
+  const models = [...new Set([primary, ...ranked, LAST_RESORT_MODEL])]
+    .filter(m => m && !isBadModel(m))
+    .slice(0, 4);
   let lastErr;
   let rediscovered = false;
   const queue = [...models];
@@ -416,18 +421,22 @@ async function callGemini(contents, opts = {}) {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const reply = await geminiOnce(model, contents, opts);
-        // Whatever finally worked becomes the saved choice, so the next call
-        // does not start by retrying a dead model.
-        if (model !== store.model) { store.model = model; populateModelSelect(cachedModels(), model); }
+        // Persist a switch only when the previous choice is genuinely dead —
+        // a model that was merely busy should not be demoted permanently.
+        if (model !== store.model && isBadModel(store.model)) {
+          store.model = model;
+          populateModelSelect(cachedModels(), model);
+        }
         return reply;
       } catch (e) {
         lastErr = e;
         const st = e.status;
         if (st === 400 && /API key|API_KEY/i.test(e.body || '')) throw new Error('金鑰無效，請到設定檢查。');
         if (st === 403) throw new Error('金鑰權限不足，或此金鑰未啟用 Gemini API。');
-        // transient → wait and retry same model
+        if (e.fatal) throw e;   // timeout / truncated / blocked: retrying won't help
+        // transient → back off, then retry the same model before moving on
         if (st === 503 || st === 500 || st === 429 || st === undefined) {
-          await sleep((st === 429 ? 1500 : 700) * (attempt + 1));
+          await sleep((st === 429 ? 2000 : 1200) * (attempt + 1));
           continue;
         }
         break; // other error → try next model
@@ -460,6 +469,11 @@ async function callGemini(contents, opts = {}) {
       `請到 ⚙ 設定按「測試金鑰與模型」查看你的金鑰支援哪些模型${detail}`);
   }
   if (st === 400) throw new Error('請求被拒絕' + (detail || '：請確認檔案格式與大小。'));
+  if (st === 503) {
+    throw new Error(
+      `Google 目前很忙（已依序試過 ${models.length} 個模型都塞車）。` +
+      `這是暫時性的，過幾分鐘再試通常就好了${detail}`);
+  }
   throw new Error('伺服器忙碌中，已自動重試仍失敗，請稍後再試' + (st ? ' (' + st + ')' : '') + detail);
 }
 
@@ -1646,7 +1660,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
