@@ -1422,7 +1422,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
@@ -1494,9 +1494,21 @@ if ('serviceWorker' in navigator) {
       setInterval(() => reg.update().catch(() => {}), 60000);
     } catch (e) {}
   });
-  // reload once the new SW takes control (after user taps 更新)
+  // A new worker now claims control as soon as it installs, so this fires on
+  // its own — no hard reload needed to escape a stale bundle. Apply it
+  // silently, unless doing so would throw away a conversation in progress.
   let refreshing = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing) return; refreshing = true; location.reload();
+    if (refreshing) return;
+    const midSession = currentScreen() === 'chat' &&
+      state.turns.some(t => t.role === 'user' && !t.hidden);
+    if (midSession) {
+      // Let them finish; the banner hands them the update when they're ready.
+      navigator.serviceWorker.getRegistration().then(reg => reg && showUpdateBar(reg)).catch(() => {});
+      return;
+    }
+    refreshing = true;
+    rememberScreen();
+    location.reload();
   });
 }

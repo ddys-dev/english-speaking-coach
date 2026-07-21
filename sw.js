@@ -1,11 +1,11 @@
 /* Simple offline-first cache for the app shell.
    Bump CACHE version when you change files. */
-const CACHE = 'speakprep-v10';
+const CACHE = 'speakprep-v11';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=10',
-  './app.js?v=10',
+  './styles.css?v=11',
+  './app.js?v=11',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
@@ -13,8 +13,12 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  // Do NOT auto-skipWaiting — wait for the user to tap "更新" in the app,
-  // which posts SKIP_WAITING below. This powers the update banner.
+  // Take over as soon as we are installed. Waiting for the user to tap 更新
+  // meant a stale worker could keep serving an old bundle indefinitely, and
+  // escaping it needed a manual hard reload — the one thing the update button
+  // is supposed to spare them. The page decides what to do about the handover
+  // (see the controllerchange listener in app.js).
+  self.skipWaiting();
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
 });
 
