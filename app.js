@@ -737,8 +737,8 @@ const SCENARIO_SHAPE = `{
   "glossary": [ { "term": "<English term from the material>", "zh": "<short Traditional Chinese gloss>" } ],
   "yourRole": "<one sentence: who the learner is in this meeting and what they want>",
   "counterpartRole": "<one sentence: who the AI will play>",
-  "openingHints": ["<English phrase useful for opening this specific meeting>"],
-  "questionIdeas": ["<a sharp question worth asking about THIS material>"]
+  "openingHints": ["<English phrase useful for opening this specific meeting — give exactly 5, covering greeting, stating purpose, setting the agenda, handing over, and re-opening after small talk>"],
+  "questionIdeas": ["<a sharp question worth asking about THIS material — give exactly 10, ordered from opening probes to harder challenges, and spread across technology, numbers, competition, risks and next steps>"]
 }`;
 
 async function generateScenario() {
@@ -1030,9 +1030,77 @@ RULES:
 - Begin the CURRENT STAGE now with one short line that hands the floor to the learner.`;
 }
 
+/* Sending the learner into a live conversation with the briefing hidden means
+   they lose the phrases and questions exactly when they need them. Keep it all
+   one tap away, with the section for the current stage first. */
+const STAGE_REF = {
+  opening:    ['openingHints', 'keyPoints', 'questionIdeas', 'glossary'],
+  questions:  ['questionIdeas', 'keyPoints', 'glossary', 'openingHints'],
+  discussion: ['keyPoints', 'questionIdeas', 'glossary', 'openingHints'],
+  summary:    ['keyPoints', 'glossary', 'questionIdeas', 'openingHints'],
+};
+const REF_TITLES = {
+  openingHints:  'Opening Phrases 開場可用句',
+  questionIdeas: 'Questions Worth Asking 值得問的問題',
+  keyPoints:     'Key Points 重點',
+  glossary:      'Glossary 詞彙',
+};
+
+function renderRefPanel() {
+  const a = state.article;
+  const body = $('ref-body');
+  if (!a || !body) return;
+  body.innerHTML = '';
+
+  const stageId = (STAGES[state.stageIndex] || STAGES[0]).id;
+  const order = STAGE_REF[stageId] || STAGE_REF.opening;
+
+  order.forEach((key, i) => {
+    const items = a[key];
+    if (!items?.length) return;
+    const sec = el('div', 'ref-sec' + (i === 0 ? ' now' : ''));
+    sec.appendChild(el('h4', null, REF_TITLES[key] + (i === 0 ? '　← 這一關用得到' : '')));
+    if (key === 'glossary') {
+      items.forEach(g => {
+        const r = el('div', 'ref-term');
+        r.innerHTML = `<b>${esc(g.term)}</b> — ${esc(g.zh || '')}`;
+        sec.appendChild(r);
+      });
+    } else {
+      const ul = el('ul');
+      items.forEach(x => ul.appendChild(el('li', null, x)));
+      sec.appendChild(ul);
+    }
+    body.appendChild(sec);
+  });
+
+  if (a.article) {
+    const sec = el('div', 'ref-sec');
+    sec.appendChild(el('h4', null, 'Briefing 原文'));
+    String(a.article).split(/\n{2,}/).forEach(t => sec.appendChild(el('p', null, t)));
+    body.appendChild(sec);
+  }
+  body.scrollTop = 0;
+}
+
+function toggleRefPanel(open) {
+  const panel = $('ref-panel');
+  const wantOpen = open ?? panel.hidden;
+  if (wantOpen) renderRefPanel();
+  panel.hidden = !wantOpen;
+  $('btn-ref').classList.toggle('active', wantOpen);
+}
+
 function renderStageBar() {
   const bar = $('stage-bar');
-  if (state.mode !== 'doc') { bar.hidden = true; return; }
+  const refBtn = $('btn-ref');
+  if (state.mode !== 'doc') {
+    bar.hidden = true;
+    refBtn.hidden = true;
+    $('ref-panel').hidden = true;
+    return;
+  }
+  refBtn.hidden = !state.article;
   bar.hidden = false;
   bar.innerHTML = '';
   STAGES.forEach((s, i) => {
@@ -1072,6 +1140,7 @@ function nextStage() {
   state.stageIndex++;
   renderStageBar();
   updateStageButton();
+  if (!$('ref-panel').hidden) renderRefPanel();   // resurface what this stage needs
   const st = STAGES[state.stageIndex];
   addMessage('stage', `── ${state.stageIndex + 1}. ${st.zh} · ${st.en} ──`);
   sendToAI('__START__', true);
@@ -1337,6 +1406,8 @@ $('btn-send').onclick = sendTyped;
 textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTyped(); } });
 $('btn-end').onclick = endSession;
 $('btn-next-stage').onclick = nextStage;
+$('btn-ref').onclick = () => toggleRefPanel();
+$('btn-ref-close').onclick = () => toggleRefPanel(false);
 
 /* ---------- Speech recognition ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1923,7 +1994,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

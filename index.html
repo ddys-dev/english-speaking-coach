@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=19" />
+  <link rel="stylesheet" href="styles.css?v=20" />
 </head>
 <body>
   <div id="app">
@@ -223,7 +223,19 @@
       <!-- ===== CHAT ===== -->
       <section id="screen-chat" class="screen">
         <div id="stage-bar" class="stage-bar" hidden></div>
-        <div id="chat-context" class="chat-context"></div>
+        <div class="chat-topline">
+          <div id="chat-context" class="chat-context"></div>
+          <button id="btn-ref" class="ref-btn" hidden>📄 資料</button>
+        </div>
+
+        <!-- Reference material, reachable without leaving the conversation -->
+        <div id="ref-panel" class="ref-panel" hidden>
+          <div class="ref-head">
+            <span>📄 參考資料 · Your notes</span>
+            <button id="btn-ref-close" class="icon-btn" aria-label="Close">✕</button>
+          </div>
+          <div id="ref-body"></div>
+        </div>
         <div id="messages" class="messages"></div>
         <div id="chat-status" class="chat-status" hidden></div>
 
@@ -344,6 +356,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=19"></script>
+  <script src="app.js?v=20"></script>
 </body>
 </html>
