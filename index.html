@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=24" />
+  <link rel="stylesheet" href="styles.css?v=25" />
 </head>
 <body>
   <div id="app">
@@ -350,10 +350,15 @@
 
         <div class="field">
           <label>Gemini API Key</label>
-          <input type="password" id="apikey-input" placeholder="貼上你的金鑰 (AIza...)" autocomplete="off" />
+          <!-- Same row layout as the meeting-notes app: a short name so you can
+               tell WHICH key this is, beside the key itself. -->
+          <div class="key-row">
+            <input type="text" id="apikey-name" class="key-name" placeholder="名稱（如：私人）" autocomplete="off" />
+            <input type="password" id="apikey-input" class="key-val" placeholder="貼上你的金鑰" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </div>
           <p class="hint">
             免費申請：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio →</a>
-            金鑰只存在本機瀏覽器，不會上傳。
+            金鑰只存在本機瀏覽器，不會上傳。名稱只是給自己看的註記（例：私人、公司、DD專案）。
           </p>
         </div>
 
@@ -446,6 +451,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>

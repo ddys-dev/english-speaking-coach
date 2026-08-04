@@ -98,6 +98,10 @@ textarea, input[type=password], input[type=text], select {
 }
 textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
+/* Key row, same shape as the meeting-notes app: name 30%, key the rest. */
+.key-row { display: flex; gap: 6px; align-items: center; }
+.key-row .key-name { flex: 0 0 30%; min-width: 0; }
+.key-row .key-val { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, monospace; }
 .hint a, .link { color: var(--accent); }
 .link { background: none; border: none; cursor: pointer; font-size: inherit; padding: 0; }
 

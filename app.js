@@ -7,6 +7,7 @@
 /* ---------- Storage ---------- */
 const LS = {
   key:   'sp_apikey',
+  keyName: 'sp_apikey_name',
   model: 'sp_model',
   tts:   'sp_tts',
   history:'sp_history',
@@ -18,6 +19,9 @@ const LS = {
 const store = {
   get apiKey() { return localStorage.getItem(LS.key) || ''; },
   set apiKey(v){ localStorage.setItem(LS.key, v); },
+  // A label for the human, not the API: which key is this? (私人 / 公司 / DD專案)
+  get apiKeyName() { return localStorage.getItem(LS.keyName) || ''; },
+  set apiKeyName(v){ localStorage.setItem(LS.keyName, v || ''); },
   // No hard-coded default that can be retired out from under us — an alias
   // that always points at a current model, until discovery replaces it.
   get model()  { return localStorage.getItem(LS.model) || 'gemini-flash-latest'; },
@@ -2632,6 +2636,7 @@ function renderIntro(r) {
    ============================================================ */
 function loadSettings() {
   $('apikey-input').value = store.apiKey;
+  $('apikey-name').value = store.apiKeyName;
 
   const known = cachedModels();
   if (known.length) populateModelSelect(known, store.model);
@@ -2675,6 +2680,7 @@ function saveSyncFields() {
 $('btn-save-settings').onclick = () => {
   const keyChanged = $('apikey-input').value.trim() !== store.apiKey;
   store.apiKey = $('apikey-input').value.trim();
+  store.apiKeyName = $('apikey-name').value.trim();
   // A different key may be entitled to a different set of models.
   if (keyChanged && store.apiKey) { setCachedModels([]); refreshModels().catch(() => {}); }
   store.model = $('model-select').value;
@@ -2916,7 +2922,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v24';
+const APP_VERSION = 'v25';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
