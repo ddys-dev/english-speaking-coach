@@ -58,6 +58,8 @@ const CARD_CATS = {
 };
 
 // Leitner-style spacing: a card you remember comes back later each time.
+// A new card sits in box 0 and is due immediately; getting it right walks it
+// up the ladder, getting it wrong drops it back to tomorrow.
 const BOX_DAYS = [0, 1, 3, 7, 21, 60];
 const DAY = 86400000;
 
@@ -78,7 +80,7 @@ function addCards(items, srcBrief) {
     cards.push({
       id: 'c_' + now + '_' + Math.random().toString(36).slice(2, 7),
       text, zh: it.zh || '', cat: CARD_CATS[it.cat] ? it.cat : 'other',
-      star: !!it.star, ts: now, src: srcBrief || '', box: 1, due: now,
+      star: !!it.star, ts: now, updatedAt: now, src: srcBrief || '', box: 0, due: now,
     });
     added++;
   });
@@ -2439,7 +2441,7 @@ function renderCards() {
     star.onclick = () => {
       const all = store.cards;
       const t = all.find(x => x.id === c.id);
-      if (t) { t.star = !t.star; store.cards = all; renderCards(); }
+      if (t) { t.star = !t.star; t.updatedAt = Date.now(); store.cards = all; renderCards(); }
     };
     const say = el('button', 'card-btn', '🔊');
     say.onclick = () => speak(c.text);
@@ -2447,7 +2449,9 @@ function renderCards() {
     del.onclick = () => {
       if (!confirm('刪除這張卡？')) return;
       store.cards = store.cards.filter(x => x.id !== c.id);
+      tombstoneCard(c.text);
       renderCards();
+      if (syncEnabled()) syncNow(true);
     };
     acts.append(star, say, del);
     d.appendChild(acts);
@@ -2543,8 +2547,9 @@ function gradeCard(c, remembered) {
   const all = store.cards;
   const t = all.find(x => x.id === c.id);
   if (t) {
-    t.box = remembered ? Math.min((t.box || 1) + 1, BOX_DAYS.length - 1) : 1;
+    t.box = remembered ? Math.min((t.box || 0) + 1, BOX_DAYS.length - 1) : 1;
     t.due = Date.now() + BOX_DAYS[t.box] * DAY;
+    t.updatedAt = Date.now();
     store.cards = all;
   }
   recallAt++;
@@ -2756,11 +2761,23 @@ $('btn-clear-history').onclick = () => {
    ============================================================ */
 const SYNC_KEY = 'sp_sync';
 const DEL_KEY = 'sp_deleted';
+const CARD_DEL_KEY = 'sp_cards_deleted';
 function getSync() { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || null; } catch { return null; } }
 function setSync(c) { if (c) localStorage.setItem(SYNC_KEY, JSON.stringify(c)); else localStorage.removeItem(SYNC_KEY); }
 function syncEnabled() { const c = getSync(); return !!(c && c.token && c.owner && c.repo); }
 function getDeleted() { try { return JSON.parse(localStorage.getItem(DEL_KEY)) || { ids: [], at: {} }; } catch { return { ids: [], at: {} }; } }
 function setDeleted(d) { localStorage.setItem(DEL_KEY, JSON.stringify(d)); }
+/* Cards are identified across devices by their text, not their id: the same
+   phrase harvested on the phone and on the laptop are two different ids. */
+function getDeletedCards() { try { return JSON.parse(localStorage.getItem(CARD_DEL_KEY)) || { ids: [], at: {} }; } catch { return { ids: [], at: {} }; } }
+function setDeletedCards(d) { localStorage.setItem(CARD_DEL_KEY, JSON.stringify(d)); }
+function tombstoneCard(text) {
+  const k = cardKey(text); if (!k) return;
+  const d = getDeletedCards();
+  if (!d.ids.includes(k)) d.ids.push(k);
+  d.at[k] = Date.now();
+  setDeletedCards(d);
+}
 
 // UTF-8 safe base64 (handles Chinese + large files)
 function b64e(str) { const b = new TextEncoder().encode(str); let s = ''; const ch = 0x8000; for (let i = 0; i < b.length; i += ch) s += String.fromCharCode.apply(null, b.subarray(i, i + ch)); return btoa(s); }
@@ -2771,7 +2788,7 @@ function ghHead(c) { return { Authorization: `Bearer ${c.token}`, Accept: 'appli
 async function cloudPull() {
   const c = getSync(); if (!c) throw new Error('尚未設定同步');
   const res = await fetch(ghUrl(c), { headers: ghHead(c) });
-  if (res.status === 404) return { doc: { sessions: [], deleted: [], deletedAt: {} }, sha: null };
+  if (res.status === 404) return { doc: { sessions: [], deleted: [], deletedAt: {}, cards: [], cardsDeleted: [], cardsDeletedAt: {} }, sha: null };
   if (res.status === 401) throw new Error('GitHub Token 無效或已過期');
   if (res.status === 403) throw new Error('Token 權限不足（需 Contents 讀寫）');
   if (!res.ok) throw new Error('雲端讀取失敗 (' + res.status + ')');
@@ -2782,6 +2799,8 @@ async function cloudPull() {
   let doc; try { doc = JSON.parse(raw); } catch { throw new Error('雲端資料解析失敗，為保護資料已中止同步'); }
   if (!doc || typeof doc !== 'object' || !Array.isArray(doc.sessions)) throw new Error('雲端資料格式異常，已中止同步');
   doc.sessions = doc.sessions || []; doc.deleted = doc.deleted || []; doc.deletedAt = doc.deletedAt || {};
+  // A repo written by an older build has no cards; that is empty, not a wipe.
+  doc.cards = Array.isArray(doc.cards) ? doc.cards : []; doc.cardsDeleted = doc.cardsDeleted || []; doc.cardsDeletedAt = doc.cardsDeletedAt || {};
   return { doc, sha: data.sha };
 }
 async function cloudPush(doc, sha) {
@@ -2810,8 +2829,45 @@ function mergeSessions(A, B, now = Date.now()) {
   return { sessions, deleted: tomb.ids, deletedAt: tomb.at };
 }
 
-function localDoc() { const d = getDeleted(); return { sessions: store.history, deleted: d.ids, deletedAt: d.at }; }
-function applyDoc(doc) { store.history = (doc.sessions || []).slice(0, 500); setDeleted({ ids: doc.deleted || [], at: doc.deletedAt || {} }); }
+/* The phrase bank is the part that compounds, so it has to follow the learner
+   between devices too. Cards merge on their text, and the more recently
+   touched copy wins — that carries the star, the box and the due date. */
+function mergeCards(A, B, now = Date.now()) {
+  const tomb = mergeTomb({ ids: A?.cardsDeleted, at: A?.cardsDeletedAt },
+                         { ids: B?.cardsDeleted, at: B?.cardsDeletedAt }, now);
+  const del = new Map(tomb.ids.map(k => [k, tomb.at[k] || 0]));
+  const byKey = new Map();
+  for (const c of [...(A?.cards || []), ...(B?.cards || [])]) {
+    if (!c || !c.text) continue;
+    const k = cardKey(c.text);
+    if (!k) continue;
+    const stamp = c.updatedAt || c.ts || 0;
+    // A card re-learned after it was deleted elsewhere is wanted again.
+    if (del.has(k) && stamp <= del.get(k)) continue;
+    const prev = byKey.get(k);
+    if (!prev || stamp >= (prev.updatedAt || prev.ts || 0)) byKey.set(k, c);
+  }
+  const cards = Array.from(byKey.values()).sort((x, y) => (x.ts || 0) - (y.ts || 0)).slice(-2000);
+  const live = new Set(cards.map(c => cardKey(c.text)));
+  const ids = tomb.ids.filter(k => !live.has(k));
+  const at = {}; ids.forEach(k => { if (tomb.at[k]) at[k] = tomb.at[k]; });
+  return { cards, cardsDeleted: ids, cardsDeletedAt: at };
+}
+function mergeDoc(A, B, now = Date.now()) {
+  return { ...mergeSessions(A, B, now), ...mergeCards(A, B, now) };
+}
+
+function localDoc() {
+  const d = getDeleted(), cd = getDeletedCards();
+  return { sessions: store.history, deleted: d.ids, deletedAt: d.at,
+           cards: store.cards, cardsDeleted: cd.ids, cardsDeletedAt: cd.at };
+}
+function applyDoc(doc) {
+  store.history = (doc.sessions || []).slice(0, 500);
+  setDeleted({ ids: doc.deleted || [], at: doc.deletedAt || {} });
+  store.cards = doc.cards || [];
+  setDeletedCards({ ids: doc.cardsDeleted || [], at: doc.cardsDeletedAt || {} });
+}
 function setSyncStatus(t) { const e = $('sync-status'); if (e) e.textContent = t; }
 
 let syncing = false;
@@ -2821,11 +2877,11 @@ async function syncNow(silent) {
   if (!silent) setSyncStatus('同步中…');
   try {
     const { doc: cloud, sha } = await cloudPull();
-    const merged = mergeSessions(localDoc(), cloud);
+    const merged = mergeDoc(localDoc(), cloud);
     applyDoc(merged);
     try { await cloudPush(merged, sha); }
     catch (e) {
-      if (e.message === 'CONFLICT') { const again = await cloudPull(); const m2 = mergeSessions(localDoc(), again.doc); applyDoc(m2); await cloudPush(m2, again.sha); }
+      if (e.message === 'CONFLICT') { const again = await cloudPull(); const m2 = mergeDoc(localDoc(), again.doc); applyDoc(m2); await cloudPush(m2, again.sha); }
       else throw e;
     }
     setSyncStatus('已同步 ✓ ' + new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }));
@@ -2847,7 +2903,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v22';
+const APP_VERSION = 'v23';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
