@@ -2823,8 +2823,27 @@ async function cloudPush(doc, sha) {
   const res = await fetch(ghUrl(c), { method: 'PUT', headers: ghHead(c), body: JSON.stringify(body) });
   if (res.status === 409) throw new Error('CONFLICT');
   if (res.status === 401) throw new Error('GitHub Token 無效或已過期');
+  if (res.status === 404 || res.status === 403) throw new Error(await diagnoseSync(c, res.status));
   if (!res.ok) throw new Error('雲端寫入失敗 (' + res.status + ')');
   return res.json();
+}
+
+/* A 404 on write means GitHub is hiding the repo from this token — but the
+   person reading the error is looking at a repo they know exists. Ask GitHub
+   what the token can actually see, and say that instead. */
+async function diagnoseSync(c, status) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}`, { headers: ghHead(c) });
+    if (r.status === 404) return `Token 看不到 ${c.owner}/${c.repo}：到 GitHub 的 token 設定，確認 Repository access 有勾選這個 repo，改完要按 Update/Generate 才生效`;
+    if (r.ok) {
+      const info = await r.json();
+      if (!info.permissions?.push) return 'Token 只有讀取權：把 token 的 Contents 權限改成 Read and write';
+      return `雲端寫入失敗 (${status})：repo 與權限看起來正常，可能是暫時性問題，稍後再試`;
+    }
+    return `雲端寫入失敗 (${status})，檢查 repo 回應 ${r.status}`;
+  } catch {
+    return `雲端寫入失敗 (${status})，且無法連到 GitHub 查證`;
+  }
 }
 
 const TOMB_TTL = 180 * 24 * 3600 * 1000;
@@ -2922,7 +2941,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v25';
+const APP_VERSION = 'v26';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
