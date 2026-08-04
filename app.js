@@ -2657,6 +2657,21 @@ function loadSettings() {
   $('sync-repo').value = c ? `${c.owner}/${c.repo}` : '';
   $('sync-token').value = c ? c.token : '';
 }
+/* Reads the two sync fields and stores them if they form a usable config.
+   Returns an error string when they are filled in but unusable. */
+function saveSyncFields() {
+  const repo = $('sync-repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+  const token = $('sync-token').value.trim();
+  if (repo && token && repo.includes('/')) {
+    const [owner, name] = repo.split('/');
+    setSync({ owner: owner.trim(), repo: name.trim(), path: 'sessions.json', token });
+    return null;
+  }
+  if (!repo && !token) { setSync(null); return null; }
+  if (repo && !repo.includes('/')) return 'repo 格式要是「帳號/repo 名」';
+  return repo ? '還缺 Token' : '還缺 repo(帳號/repo 名)';
+}
+
 $('btn-save-settings').onclick = () => {
   const keyChanged = $('apikey-input').value.trim() !== store.apiKey;
   store.apiKey = $('apikey-input').value.trim();
@@ -2665,15 +2680,7 @@ $('btn-save-settings').onclick = () => {
   store.model = $('model-select').value;
   store.tts = $('tts-toggle').checked;
   store.keepFull = $('keepfull-toggle').checked;
-  // cloud sync config
-  const repo = $('sync-repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
-  const token = $('sync-token').value.trim();
-  if (repo && token && repo.includes('/')) {
-    const [owner, name] = repo.split('/');
-    setSync({ owner: owner.trim(), repo: name.trim(), path: 'sessions.json', token });
-  } else if (!repo && !token) {
-    setSync(null);
-  }
+  saveSyncFields();
   $('settings-saved').hidden = false;
   setTimeout(() => { $('settings-saved').hidden = true; }, 1500);
   renderHome();
@@ -2889,7 +2896,13 @@ async function syncNow(silent) {
   } catch (e) { setSyncStatus('⚠️ ' + e.message); }
   finally { syncing = false; }
 }
-$('btn-sync-now').onclick = () => syncNow(false);
+/* "Sync now" implying "with what I just typed" is the natural reading —
+   requiring a separate Save first only produces 尚未設定同步 confusion. */
+$('btn-sync-now').onclick = () => {
+  const err = saveSyncFields();
+  if (err) { setSyncStatus('⚠️ ' + err); return; }
+  syncNow(false);
+};
 
 /* ============================================================
    INIT
@@ -2903,7 +2916,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v23';
+const APP_VERSION = 'v24';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
