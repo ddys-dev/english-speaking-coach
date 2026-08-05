@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=33" />
+  <link rel="stylesheet" href="styles.css?v=34" />
 </head>
 <body>
   <div id="app">
@@ -346,15 +346,20 @@
         </p>
 
         <div class="field">
-          <label>① 你想講什麼？（中文、破英文都可以）</label>
-          <textarea id="intro-input" rows="5" placeholder="例：我在一家電子集團的策略投資部門，負責找光通訊、散熱、先進封裝的標的，也談合作。"></textarea>
-        </div>
-
-        <div class="field">
-          <label>② 這次要用在哪個領域 · Domain</label>
+          <label>① 這次要用在哪個領域 · Domain</label>
           <div class="pill-row" id="intro-domain-row"></div>
           <input type="text" id="intro-topic" placeholder="更具體的對象或場合（選填，例：Celestial AI 的第一次視訊）" autocomplete="off" style="margin-top:8px" />
           <p class="hint">同一組骨架換個領域就能重用，所以領域換了再生成一次即可。</p>
+        </div>
+
+        <div class="field">
+          <label>② 你想講什麼？（中文、破英文都可以）</label>
+          <button class="ghost-btn" id="btn-intro-draft" style="margin-bottom:8px">✨ 幫我擬一版草稿</button>
+          <textarea id="intro-input" rows="5" placeholder="例：我在一家電子集團的策略投資部門，負責找光通訊、散熱、先進封裝的標的，也談合作。"></textarea>
+          <p class="hint">
+            懶得從頭寫就按上面那顆 —— AI 會依你選的領域擬一版，不知道的地方用
+            <code>[方括號]</code> 留白，你直接改成實際情況即可。改好的內容會記住，下次自動帶入。
+          </p>
         </div>
 
         <button class="primary-btn" id="btn-intro-make">生成五個樣板 · Generate</button>
@@ -549,6 +554,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=33"></script>
+  <script src="app.js?v=34"></script>
 </body>
 </html>

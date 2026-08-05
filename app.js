@@ -12,6 +12,7 @@ const LS = {
   skeleton: 'sp_skeleton',
   packs: 'sp_packs',
   currentPack: 'sp_current_pack',
+  profile: 'sp_profile',
   keyUsage: 'sp_key_usage',
   thrifty: 'sp_thrifty',
   model: 'sp_model',
@@ -49,6 +50,10 @@ const store = {
     const first = this.keyEntries[0];
     this.keyEntries = v ? [{ name: first?.name || '', key: v }, ...this.keyEntries.slice(1)] : this.keyEntries.slice(1);
   },
+  // Who the learner is, in their own words. Typed once, reused by everything
+  // that needs to know — the introduction templates and the meeting skeleton.
+  get profile() { return localStorage.getItem(LS.profile) || ''; },
+  set profile(v){ localStorage.setItem(LS.profile, v || ''); },
   get thrifty() { return localStorage.getItem(LS.thrifty) === 'on'; },
   set thrifty(v){ localStorage.setItem(LS.thrifty, v ? 'on' : 'off'); },
   // No hard-coded default that can be retired out from under us — an alias
@@ -2864,8 +2869,51 @@ $('btn-intro').onclick = () => {
   $('intro-status').textContent = '';
   $('intro-result').innerHTML = '';
   $('btn-intro-drill').hidden = true;
+  // What they wrote last time is almost always what they want this time.
+  if (!$('intro-input').value.trim()) $('intro-input').value = store.profile;
   renderIntroDomains();
   show('intro');
+};
+
+/* Facing an empty box and being asked to describe yourself is the step people
+   put off. Offer a draft instead — with [brackets] wherever the app does not
+   actually know something, so editing it is filling in blanks, not writing. */
+$('btn-intro-draft').onclick = async () => {
+  if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+  const existing = $('intro-input').value.trim();
+  if (existing && !confirm('要用新的草稿取代目前的內容嗎？')) return;
+
+  const topic = $('intro-topic').value.trim();
+  const status = (t) => { $('intro-status').textContent = t; };
+  let stop = null;
+  try {
+    $('btn-intro-draft').disabled = true;
+    stop = startTicker(status, '擬草稿中…');
+    const raw = await callGemini([{ role: 'user', parts: [{ text:
+`Draft what a professional might want to say about themselves before a business meeting, so they can edit it rather than face a blank box.
+
+Domain for this meeting: ${introDomain}.
+${topic ? `The specific occasion: ${topic}` : ''}
+${store.profile ? `What they have said about themselves before — reuse these facts, they are true:\n"${store.profile}"` : 'Nothing is known about them yet beyond the domain.'}
+
+Write it in Traditional Chinese, first person, 2-4 sentences, as rough notes — this is raw material for an English introduction, not the introduction itself.
+
+CRITICAL: invent nothing. Never make up a company name, a job title, a team name, years of experience or any specific fact. Wherever you would need a detail you have not been given, write a [方括號] placeholder instead — [公司名]、[你的職稱]、[對方公司]. A draft that is half brackets is correct if that is all you actually know.
+
+Also propose a concrete occasion line for the second field: a realistic meeting in this domain, phrased the way they would type it.
+
+Return ONLY JSON: { "draft": "...", "occasion": "..." }` }] }], { json: true, temperature: 0.5, timeoutMs: 120000 });
+    stop(); stop = null;
+    const r = parseJson(raw);
+    if (r.draft) $('intro-input').value = r.draft;
+    if (r.occasion && !topic) $('intro-topic').value = r.occasion;
+    status('草稿好了 —— 把 [方括號] 的地方改成你的實際情況，再按下面生成。');
+  } catch (e) {
+    status('⚠️ ' + e.message);
+  } finally {
+    if (stop) stop();
+    $('btn-intro-draft').disabled = false;
+  }
 };
 
 let introDomain = CATEGORIES.work.domains[0];
@@ -2881,8 +2929,9 @@ function renderIntroDomains() {
 
 $('btn-intro-make').onclick = async () => {
   const raw = $('intro-input').value.trim();
-  if (raw.length < 10) { $('intro-status').textContent = '⚠️ 請先寫幾句你想表達的內容。'; return; }
+  if (raw.length < 10) { $('intro-status').textContent = '⚠️ 請先寫幾句你想表達的內容，或按上面的「幫我擬一版草稿」。'; return; }
   if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+  store.profile = raw;   // remembered for next time, and for the skeleton screen
 
   const topic = $('intro-topic').value.trim();
   let stop = null;
@@ -3041,6 +3090,7 @@ function setSkeleton(v) {
 
 $('btn-skeleton').onclick = () => {
   $('skeleton-status').textContent = '';
+  if (!$('skeleton-role').value.trim()) $('skeleton-role').value = store.profile;
   const saved = getSkeleton();
   if (saved) renderSkeleton(saved);
   else { $('skeleton-result').innerHTML = ''; $('skeleton-actions').hidden = true; }
@@ -3050,6 +3100,7 @@ $('btn-skeleton').onclick = () => {
 $('btn-skeleton-make').onclick = async () => {
   if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
   const role = $('skeleton-role').value.trim();
+  if (role) store.profile = role;
   const status = (t) => { $('skeleton-status').textContent = t; };
   let stop = null;
   try {
@@ -3660,7 +3711,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
