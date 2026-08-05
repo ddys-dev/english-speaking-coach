@@ -8,6 +8,9 @@
 const LS = {
   key:   'sp_apikey',
   keyName: 'sp_apikey_name',
+  keys:  'sp_apikeys',
+  keyUsage: 'sp_key_usage',
+  thrifty: 'sp_thrifty',
   model: 'sp_model',
   tts:   'sp_tts',
   history:'sp_history',
@@ -17,11 +20,34 @@ const LS = {
   keepFull: 'sp_keep_full',
 };
 const store = {
-  get apiKey() { return localStorage.getItem(LS.key) || ''; },
-  set apiKey(v){ localStorage.setItem(LS.key, v); },
-  // A label for the human, not the API: which key is this? (私人 / 公司 / DD專案)
-  get apiKeyName() { return localStorage.getItem(LS.keyName) || ''; },
-  set apiKeyName(v){ localStorage.setItem(LS.keyName, v || ''); },
+  // Several keys can be held at once, each with a label for the human
+  // (私人 / 公司 / DD專案). One key's free quota is small; a spare keeps the
+  // session going instead of stopping at 429.
+  get keyEntries() {
+    try {
+      const v = JSON.parse(localStorage.getItem(LS.keys));
+      if (Array.isArray(v)) return v.map(e => ({ name: (e.name || '').trim(), key: (e.key || '').trim() })).filter(e => e.key);
+    } catch {}
+    // Before multi-key there was one key and one name.
+    const solo = localStorage.getItem(LS.key) || '';
+    return solo ? [{ name: localStorage.getItem(LS.keyName) || '', key: solo }] : [];
+  },
+  set keyEntries(v) {
+    const clean = (v || []).map(e => ({ name: (e.name || '').trim(), key: (e.key || '').trim() })).filter(e => e.key);
+    localStorage.setItem(LS.keys, JSON.stringify(clean));
+    // Keep the old single-key slot in step so nothing else has to know.
+    localStorage.setItem(LS.key, clean[0]?.key || '');
+    localStorage.setItem(LS.keyName, clean[0]?.name || '');
+  },
+  get apiKeys() { return this.keyEntries.map(e => e.key); },
+  // Everything downstream asks for "the" key — give it whichever is up next.
+  get apiKey() { return activeKey(); },
+  set apiKey(v) {
+    const first = this.keyEntries[0];
+    this.keyEntries = v ? [{ name: first?.name || '', key: v }, ...this.keyEntries.slice(1)] : this.keyEntries.slice(1);
+  },
+  get thrifty() { return localStorage.getItem(LS.thrifty) === 'on'; },
+  set thrifty(v){ localStorage.setItem(LS.thrifty, v ? 'on' : 'off'); },
   // No hard-coded default that can be retired out from under us — an alias
   // that always points at a current model, until discovery replaces it.
   get model()  { return localStorage.getItem(LS.model) || 'gemini-flash-latest'; },
@@ -39,6 +65,39 @@ const store = {
   get keepFull(){ return localStorage.getItem(LS.keepFull) === 'on'; },
   set keepFull(v){ localStorage.setItem(LS.keepFull, v ? 'on' : 'off'); },
 };
+
+/* ---------- Key rotation & local usage ----------
+   Google does not tell a browser how much quota a key has left, so count the
+   calls made here and step a key aside for a while once it answers 429. */
+const KEY_COOLDOWN = 10 * 60 * 1000;
+const today = () => new Date().toISOString().slice(0, 10);
+
+function usageData() {
+  let u;
+  try { u = JSON.parse(localStorage.getItem(LS.keyUsage)); } catch {}
+  if (!u || typeof u !== 'object') u = {};
+  if (u.day !== today()) u = { day: today(), counts: {}, cool: {} };
+  u.counts = u.counts || {}; u.cool = u.cool || {};
+  return u;
+}
+function saveUsage(u) { try { localStorage.setItem(LS.keyUsage, JSON.stringify(u)); } catch {} }
+function noteKeyUse(key) { if (!key) return; const u = usageData(); u.counts[key] = (u.counts[key] || 0) + 1; saveUsage(u); }
+function coolKey(key, ms = KEY_COOLDOWN) { if (!key) return; const u = usageData(); u.cool[key] = Date.now() + ms; saveUsage(u); }
+function keyCooling(key) { const t = usageData().cool[key] || 0; return t > Date.now() ? t - Date.now() : 0; }
+function keyUses(key) { return usageData().counts[key] || 0; }
+
+/* The next key to use: the first one not sitting out, else the first one —
+   a stale guess beats refusing to try at all. */
+function activeKey() {
+  const keys = store.keyEntries.map(e => e.key);
+  return keys.find(k => !keyCooling(k)) || keys[0] || '';
+}
+// Active key first, then the rest, so rotation always moves forward.
+function rotationKeys() {
+  const keys = store.keyEntries.map(e => e.key);
+  const first = activeKey();
+  return [first, ...keys.filter(k => k !== first)].filter(Boolean);
+}
 
 /* ============================================================
    PHRASE BANK
@@ -530,7 +589,9 @@ async function fetchModels(key) {
 function rankModel(name) {
   let s = 0;
   if (/flash/.test(name)) s += 100;
-  if (/lite/.test(name)) s -= 25;
+  // Thrifty mode inverts the one preference that costs quota: Flash-Lite has a
+  // far larger free allowance, and a slightly plainer answer beats a 429.
+  if (/lite/.test(name)) s += store.thrifty ? 40 : -25;
   if (/preview|exp|thinking|tts|image|embedding|vision/.test(name)) s -= 60;
   if (/latest/.test(name)) s += 5;
   const v = parseFloat((name.match(/gemini-([0-9]+(?:\.[0-9]+)?)/) || [])[1] || 0);
@@ -571,8 +632,8 @@ async function refreshModels(key) {
   return list;
 }
 
-async function geminiOnce(model, contents, opts) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(store.apiKey)}`;
+async function geminiOnce(model, contents, opts, key) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key || store.apiKey)}`;
   const body = {
     contents,
     generationConfig: {
@@ -652,11 +713,18 @@ async function callGemini(contents, opts = {}) {
   let rediscovered = false;
   const queue = [...models];
 
+  // A file uploaded through the Files API belongs to the key that uploaded it,
+  // so a request carrying one must stay on that key.
+  const keys = opts.pinKey ? [opts.pinKey] : rotationKeys();
+  let keyIdx = 0;
+
   while (queue.length) {
     const model = queue.shift();
     for (let attempt = 0; attempt < 3; attempt++) {
+      const key = keys[keyIdx] || store.apiKey;
       try {
-        const reply = await geminiOnce(model, contents, opts);
+        const reply = await geminiOnce(model, contents, opts, key);
+        noteKeyUse(key);
         // Persist a switch only when the previous choice is genuinely dead —
         // a model that was merely busy should not be demoted permanently.
         if (model !== store.model && isBadModel(store.model)) {
@@ -670,6 +738,14 @@ async function callGemini(contents, opts = {}) {
         if (st === 400 && /API key|API_KEY/i.test(e.body || '')) throw new Error('金鑰無效，請到設定檢查。');
         if (st === 403) throw new Error('金鑰權限不足，或此金鑰未啟用 Gemini API。');
         if (e.fatal) throw e;   // timeout / truncated / blocked: retrying won't help
+        // 429 means this key is spent, not that the model is broken: sit the
+        // key out and hand the work to a spare before falling back to waiting.
+        if (st === 429) {
+          noteKeyUse(key);
+          coolKey(key);
+          const next = keys.findIndex((k, i) => i > keyIdx && !keyCooling(k));
+          if (next !== -1) { keyIdx = next; continue; }
+        }
         // transient → back off, then retry the same model before moving on
         if (st === 503 || st === 500 || st === 429 || st === undefined) {
           await sleep((st === 429 ? 2000 : 1200) * (attempt + 1));
@@ -698,7 +774,11 @@ async function callGemini(contents, opts = {}) {
 
   const st = lastErr && lastErr.status;
   const detail = (lastErr && lastErr.detail) ? '：' + lastErr.detail : '';
-  if (st === 429) throw new Error('已達免費額度上限，請稍後再試。' + detail);
+  if (st === 429) {
+    throw new Error(
+      (keys.length > 1 ? `${keys.length} 把金鑰都已達免費額度上限` : '已達免費額度上限') +
+      '，請稍後再試，或到 ⚙ 設定新增一把（建在不同的 Google Cloud 專案）。' + detail);
+  }
   if (st === 404) {
     throw new Error(
       `找不到可用的模型（試過：${models.join('、')}）。` +
@@ -813,8 +893,14 @@ function mimeFor(file) {
   }[ext] || 'application/octet-stream';
 }
 
+/* A file uploaded through the Files API exists only for the key that uploaded
+   it, so whoever generates from it has to use the same key. */
+let filesApiKey = null;
+
 async function uploadViaFilesAPI(file, onProgress) {
-  const key = encodeURIComponent(store.apiKey);
+  const rawKey = store.apiKey;
+  filesApiKey = rawKey;
+  const key = encodeURIComponent(rawKey);
   const mime = mimeFor(file);
   onProgress && onProgress('上傳中… 0%');
 
@@ -864,6 +950,7 @@ async function uploadViaFilesAPI(file, onProgress) {
 // Turn a picked file into a Gemini `parts` entry, choosing inline vs Files API.
 async function filePartFor(file, onProgress) {
   const mime = mimeFor(file);
+  filesApiKey = null;   // inline files belong to no key
   if (file.size <= INLINE_LIMIT) {
     onProgress && onProgress('讀取檔案中…');
     return { inline_data: { mime_type: mime, data: await fileToBase64(file) } };
@@ -1038,7 +1125,7 @@ ${SCENARIO_SHAPE}` });
     const timeoutMs = big ? 600000 : (sourceKind === 'file' ? 300000 : 120000);
     // url_context and forced JSON output don't reliably coexist — when a tool
     // is in play, ask for JSON in the prompt and parse leniently instead.
-    const raw = await callGemini([{ role: 'user', parts }], { json: !tools, temperature: 0.5, tools, timeoutMs });
+    const raw = await callGemini([{ role: 'user', parts }], { json: !tools, temperature: 0.5, tools, timeoutMs, pinKey: filesApiKey });
     stopTick(); stopTick = null;
     const pkg = parseJson(raw);
 
@@ -1516,7 +1603,7 @@ Return ONLY JSON with this exact shape:
 ${REVIEW_SHAPE}` });
 
     stopTick = startTicker(status, 'AI 分析中…（錄音較長時需要數分鐘）');
-    const raw = await callGemini([{ role: 'user', parts }], { json: true, temperature: 0.35, timeoutMs: 300000 });
+    const raw = await callGemini([{ role: 'user', parts }], { json: true, temperature: 0.35, timeoutMs: 300000, pinKey: filesApiKey });
     stopTick(); stopTick = null;
     const rv = parseJson(raw);
     status('');
@@ -2634,9 +2721,56 @@ function renderIntro(r) {
 /* ============================================================
    SETTINGS
    ============================================================ */
+/* ---------- Key list ---------- */
+function addKeyRow(entry) {
+  const div = el('div', 'key-row');
+  div.innerHTML =
+    `<input type="text" class="key-name" placeholder="名稱（如：私人）" autocomplete="off" />` +
+    `<input type="password" class="key-val" placeholder="貼上金鑰" autocomplete="off" autocapitalize="off" spellcheck="false" />` +
+    `<button class="key-del" type="button" title="刪除">✕</button>`;
+  div.querySelector('.key-name').value = entry?.name || '';
+  div.querySelector('.key-val').value = entry?.key || '';
+  div.querySelector('.key-del').onclick = () => {
+    div.remove();
+    if (!$('key-list').children.length) addKeyRow();
+  };
+  $('key-list').appendChild(div);
+}
+function readKeyRows() {
+  return [...$('key-list').querySelectorAll('.key-row')].map(r => ({
+    name: r.querySelector('.key-name').value,
+    key: r.querySelector('.key-val').value,
+  }));
+}
+function renderKeyList() {
+  $('key-list').innerHTML = '';
+  const entries = store.keyEntries;
+  (entries.length ? entries : [null]).forEach(addKeyRow);
+  renderUsage();
+}
+/* Which key is carrying the load today, and which one is sitting out. */
+function renderUsage() {
+  const box = $('usage-box');
+  if (!box) return;
+  box.innerHTML = '';
+  const entries = store.keyEntries;
+  if (!entries.length) return;
+  const current = activeKey();
+  entries.forEach((e, i) => {
+    const row = el('div', 'usage-row');
+    const left = el('span', 'u-name', (e.name || `金鑰${i + 1}`) + (e.key === current ? ' ◀ 使用中' : ''));
+    const cooling = keyCooling(e.key);
+    const right = el('span', cooling ? 'u-cool' : null,
+      `今日 ${keyUses(e.key)} 次 ｜ ` + (cooling ? `冷卻中 ${Math.ceil(cooling / 60000)} 分` : '可用'));
+    row.append(left, right);
+    box.appendChild(row);
+  });
+}
+
 function loadSettings() {
-  $('apikey-input').value = store.apiKey;
-  $('apikey-name').value = store.apiKeyName;
+  renderKeyList();
+  $('app-url').value = location.origin + location.pathname;
+  renderThrifty();
 
   const known = cachedModels();
   if (known.length) populateModelSelect(known, store.model);
@@ -2661,7 +2795,40 @@ function loadSettings() {
   const c = getSync();
   $('sync-repo').value = c ? `${c.owner}/${c.repo}` : '';
   $('sync-token').value = c ? c.token : '';
+  renderSyncState();
 }
+function renderSyncState() {
+  const e = $('sync-state');
+  if (e) e.textContent = syncEnabled() ? '｜狀態：已開啟' : '｜狀態：未開啟（只存本機）';
+}
+function renderThrifty() {
+  document.querySelectorAll('#thrifty-row .pill').forEach(p =>
+    p.classList.toggle('active', (p.dataset.thrifty === 'on') === store.thrifty));
+}
+document.querySelectorAll('#thrifty-row .pill').forEach(p => {
+  p.onclick = () => {
+    store.thrifty = p.dataset.thrifty === 'on';
+    renderThrifty();
+    // The ranking just changed, so the recommended model has too.
+    const list = cachedModels();
+    if (list.length) { store.model = bestModel(list) || store.model; populateModelSelect(usableModels(list), store.model); }
+  };
+});
+$('btn-add-key').onclick = () => addKeyRow();
+$('btn-copy-url').onclick = async () => {
+  const b = $('btn-copy-url');
+  try {
+    await navigator.clipboard.writeText($('app-url').value);
+    b.textContent = '已複製 ✓';
+  } catch {
+    // iOS refuses the clipboard outside a gesture or without HTTPS — select
+    // the text so a long-press can copy it instead.
+    $('app-url').focus();
+    $('app-url').setSelectionRange(0, $('app-url').value.length);
+    b.textContent = '請長按上方網址複製';
+  }
+  setTimeout(() => { b.textContent = '複製網址'; }, 1800);
+};
 /* Reads the two sync fields and stores them if they form a usable config.
    Returns an error string when they are filled in but unusable. */
 function saveSyncFields() {
@@ -2678,15 +2845,17 @@ function saveSyncFields() {
 }
 
 $('btn-save-settings').onclick = () => {
-  const keyChanged = $('apikey-input').value.trim() !== store.apiKey;
-  store.apiKey = $('apikey-input').value.trim();
-  store.apiKeyName = $('apikey-name').value.trim();
+  const before = store.apiKeys.join('|');
+  store.keyEntries = readKeyRows();
+  const keyChanged = store.apiKeys.join('|') !== before;
   // A different key may be entitled to a different set of models.
   if (keyChanged && store.apiKey) { setCachedModels([]); refreshModels().catch(() => {}); }
+  renderUsage();
   store.model = $('model-select').value;
   store.tts = $('tts-toggle').checked;
   store.keepFull = $('keepfull-toggle').checked;
   saveSyncFields();
+  renderSyncState();
   $('settings-saved').hidden = false;
   setTimeout(() => { $('settings-saved').hidden = true; }, 1500);
   renderHome();
@@ -2709,11 +2878,15 @@ $('btn-voice-test').onclick = () =>
    instead of surfacing as a bare status code somewhere downstream. */
 $('btn-test-api').onclick = async () => {
   const out = $('api-test-status');
-  const key = $('apikey-input').value.trim() || store.apiKey;
+  // Test what is on screen, saved or not — the whole point is to check a key
+  // you just pasted. The first one that answers is the one to probe models with.
+  const typed = readKeyRows().map(e => e.key.trim()).filter(Boolean);
+  const key = typed[0] || store.apiKey;
   if (!key) { out.textContent = '⚠️ 尚未填入金鑰。'; return; }
 
   out.textContent = '測試中…';
   const lines = [];
+  if (typed.length > 1) lines.push(`共 ${typed.length} 把金鑰，以第 1 把測試模型清單。`);
 
   // Ask the key what it is entitled to before testing anything.
   let available = [];
@@ -2925,8 +3098,51 @@ async function syncNow(silent) {
    requiring a separate Save first only produces 尚未設定同步 confusion. */
 $('btn-sync-now').onclick = () => {
   const err = saveSyncFields();
+  renderSyncState();
   if (err) { setSyncStatus('⚠️ ' + err); return; }
   syncNow(false);
+};
+$('btn-sync-off').onclick = () => {
+  if (!confirm('關閉同步後，紀錄只會存在這台裝置。\n\n雲端上已同步的內容不會被刪除。')) return;
+  setSync(null);
+  $('sync-repo').value = ''; $('sync-token').value = '';
+  renderSyncState();
+  setSyncStatus('已關閉同步，只存本機');
+};
+
+/* ---------- Backup / restore ----------
+   Sync needs GitHub and a token; a file needs neither. Same merge either way,
+   so importing an old backup can only add, never clobber something newer. */
+$('btn-export').onclick = () => {
+  const doc = { app: 'SpeakPrep', version: APP_VERSION, exportedAt: new Date().toISOString(), ...localDoc() };
+  const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `speakprep-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  $('backup-status').textContent = `已匯出 ${store.history.length} 筆紀錄、${store.cards.length} 張卡片`;
+};
+$('btn-import').onclick = () => $('import-file').click();
+$('import-file').onchange = async function () {
+  const file = this.files[0];
+  this.value = '';
+  if (!file) return;
+  const status = (t) => { $('backup-status').textContent = t; };
+  try {
+    const doc = JSON.parse(await file.text());
+    if (!doc || typeof doc !== 'object' || (!Array.isArray(doc.sessions) && !Array.isArray(doc.cards))) {
+      status('⚠️ 這不是 SpeakPrep 的備份檔'); return;
+    }
+    const beforeH = store.history.length, beforeC = store.cards.length;
+    applyDoc(mergeDoc(localDoc(), doc));
+    const addedH = store.history.length - beforeH, addedC = store.cards.length - beforeC;
+    status(`已合併：紀錄 +${addedH} 筆（共 ${store.history.length}）、卡片 +${addedC} 張（共 ${store.cards.length}）`);
+    renderHome();
+    if (syncEnabled()) syncNow(true);
+  } catch (e) {
+    status('⚠️ 讀取失敗：' + e.message);
+  }
 };
 
 /* ============================================================
@@ -2941,7 +3157,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v26';
+const APP_VERSION = 'v27';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

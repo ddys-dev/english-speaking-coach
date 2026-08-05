@@ -99,9 +99,25 @@ textarea, input[type=password], input[type=text], select {
 textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
 /* Key row, same shape as the meeting-notes app: name 30%, key the rest. */
-.key-row { display: flex; gap: 6px; align-items: center; }
+.key-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
 .key-row .key-name { flex: 0 0 30%; min-width: 0; }
 .key-row .key-val { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, monospace; }
+.key-row .key-del {
+  flex: 0 0 auto; width: 40px; height: 42px; border-radius: 10px;
+  background: var(--card); border: 1px solid rgba(148,163,184,.2);
+  color: #f87171; font-size: 15px; cursor: pointer;
+}
+.key-row .key-del:active { opacity: .7; }
+/* Per-key usage, so a key that has gone quiet can be told from one that is spent. */
+.usage-row {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 7px 2px; font-size: 12.5px; color: var(--muted);
+  border-top: 1px solid rgba(148,163,184,.12);
+}
+.usage-row .u-name { color: var(--text); font-weight: 600; }
+.usage-row .u-cool { color: #fbbf24; }
+.meta { font-size: 12px; color: var(--muted); font-weight: 400; }
+#app-url { font-size: 13px; font-family: ui-monospace, monospace; }
 .hint a, .link { color: var(--accent); }
 .link { background: none; border: none; cursor: pointer; font-size: inherit; padding: 0; }
 

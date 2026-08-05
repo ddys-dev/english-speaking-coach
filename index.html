@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=26" />
+  <link rel="stylesheet" href="styles.css?v=27" />
 </head>
 <body>
   <div id="app">
@@ -349,16 +349,41 @@
         <h2 class="section-label">設定 · Settings</h2>
 
         <div class="field">
-          <label>Gemini API Key</label>
+          <label>🔗 這個 App 的網址</label>
+          <input type="text" id="app-url" readonly />
+          <button class="ghost-btn" id="btn-copy-url" style="margin-top:8px">複製網址</button>
+          <p class="hint">
+            用這個網址可在電腦或其他手機開啟同一個 App（PWA 從主畫面開啟時看不到網址列，所以放在這裡）。<br>
+            練習紀錄<b>不會</b>跟著網址走：每台裝置各自存在本機，要跨裝置看到同一份紀錄，需開啟下方的雲端同步。
+          </p>
+        </div>
+
+        <div class="field">
+          <label>Gemini API 金鑰</label>
           <!-- Same row layout as the meeting-notes app: a short name so you can
-               tell WHICH key this is, beside the key itself. -->
-          <div class="key-row">
-            <input type="text" id="apikey-name" class="key-name" placeholder="名稱（如：私人）" autocomplete="off" />
-            <input type="password" id="apikey-input" class="key-val" placeholder="貼上你的金鑰" autocomplete="off" autocapitalize="off" spellcheck="false" />
-          </div>
+               tell WHICH key this is, beside the key itself. Several keys can
+               be listed; a key that hits its quota steps aside for the next. -->
+          <div id="key-list"></div>
+          <button class="ghost-btn" id="btn-add-key">＋ 新增一把金鑰</button>
+          <div id="usage-box"></div>
           <p class="hint">
             免費申請：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio →</a>
-            金鑰只存在本機瀏覽器，不會上傳。名稱只是給自己看的註記（例：私人、公司、DD專案）。
+            金鑰只存在本機瀏覽器，不會上傳。<br>
+            <b>多把金鑰</b>：每格填一把、可自己命名（例：私人、公司），撞到用量上限時會自動換下一把。
+            ⚠️ 每把要建在<b>不同的 Google Cloud 專案</b>才有各自的額度。<br>
+            <b>用量</b>為本機統計（今天在這台裝置呼叫幾次），非 Google 官方剩餘額度。
+          </p>
+        </div>
+
+        <div class="field">
+          <label>🎚️ 模型策略 · Model strategy</label>
+          <div class="pill-row" id="thrifty-row">
+            <button class="pill" data-thrifty="off">自動（品質優先）</button>
+            <button class="pill" data-thrifty="on">省額度（較不會卡）</button>
+          </div>
+          <p class="hint">
+            一直撞到「用量上限（429）」跑不動時，切到<b>省額度</b>：優先選 <b>Flash-Lite</b> 類的模型，
+            免費層額度大很多、較不會卡；代價是回饋品質略降一點。可隨時切回。
           </p>
         </div>
 
@@ -418,19 +443,39 @@
         </div>
 
         <div class="field sync-zone">
-          <label>☁️ 跨裝置同步 · Cloud Sync（選填）</label>
+          <label>☁️ 跨裝置同步 · Cloud Sync（選填）<span id="sync-state" class="meta"></span></label>
           <p class="hint" style="margin:0 0 10px">
             練習紀錄與<b>語料庫</b>存到你的<b>私人</b> GitHub repo，電腦/手機自動同步。
             不設定就只存本機。
           </p>
           <input type="text" id="sync-repo" placeholder="資料 repo：帳號/repo 名（例：your-name/english-speaking-coach-data）" autocomplete="off" style="margin-bottom:8px" />
           <input type="password" id="sync-token" placeholder="GitHub Token（fine-grained，只給 data repo 的 Contents 讀寫）" autocomplete="off" />
-          <p class="hint">
-            建立 Token：<a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">GitHub Fine-grained tokens →</a>
-            權杖只存在本機瀏覽器。
-          </p>
-          <button class="ghost-btn" id="btn-sync-now" style="margin-top:6px">立即同步 · Sync now</button>
+          <button class="ghost-btn" id="btn-sync-now" style="margin-top:8px">立即同步 · Sync now</button>
+          <button class="ghost-btn" id="btn-sync-off" style="margin-top:8px">關閉同步（僅存本機）</button>
           <p id="sync-status" class="hint" style="margin-top:8px"></p>
+          <p class="hint">
+            <b>不填也能用</b>（紀錄只存這台裝置）。要跨裝置才需要設定，全部用<b>你自己的</b> GitHub：<br>
+            1. 先在 GitHub 建一個<b>私人 repo</b>（例如 <code>my-speakprep-data</code>），裡面不用放任何檔案，
+               把「你的帳號/repo名」填在上面。<br>
+            2. 到 <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">GitHub → Fine-grained tokens</a>
+               → Repository access 選<b>那個 data repo</b>（不是程式碼 repo）→ Permissions 的 <b>Contents</b> 設
+               <b>Read and write</b> → 產生後貼到上面。<br>
+            ⚠️ 順序有關：repo 沒先建好，token 設定頁的清單裡不會出現它。改完權限記得按 <b>Update</b> 才生效。<br>
+            權杖與紀錄都只存在你自己的裝置與你自己的 repo。
+          </p>
+        </div>
+
+        <div class="field">
+          <label>💾 備份 / 還原 · Backup</label>
+          <button class="ghost-btn" id="btn-export">⬆️ 匯出備份檔</button>
+          <button class="ghost-btn" id="btn-import" style="margin-top:8px">⬇️ 匯入備份檔</button>
+          <input type="file" id="import-file" accept="application/json,.json" hidden />
+          <p id="backup-status" class="hint" style="margin-top:8px"></p>
+          <p class="hint">
+            匯出會把<b>全部練習紀錄 + 語料庫</b>存成一個 JSON 檔。換手機或重灌時用「匯入備份檔」還原
+            —— 匯入會與現有資料<b>智慧合併</b>（不覆蓋較新的內容、不產生重複）。
+            金鑰與權杖<b>不會</b>寫進備份檔。
+          </p>
         </div>
 
         <div class="field">
@@ -451,6 +496,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=27"></script>
 </body>
 </html>
