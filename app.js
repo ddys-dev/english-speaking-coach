@@ -92,6 +92,14 @@ function activeKey() {
   const keys = store.keyEntries.map(e => e.key);
   return keys.find(k => !keyCooling(k)) || keys[0] || '';
 }
+/* Name the key an error belongs to, so "which one do I go fix?" has an answer. */
+function keyLabel(key) {
+  const entries = store.keyEntries;
+  const i = entries.findIndex(e => e.key === key);
+  if (i === -1) return '金鑰';
+  const name = entries[i].name;
+  return entries.length > 1 ? `第 ${i + 1} 把金鑰${name ? `（${name}）` : ''}` : `金鑰${name ? `（${name}）` : ''}`;
+}
 // Active key first, then the rest, so rotation always moves forward.
 function rotationKeys() {
   const keys = store.keyEntries.map(e => e.key);
@@ -702,6 +710,7 @@ async function geminiOnce(model, contents, opts, key) {
 // Retries transient errors (503/500/429/network) with backoff, then falls back
 // to a lighter model if the chosen one stays overloaded.
 async function callGemini(contents, opts = {}) {
+  if (!store.apiKeys.length) throw new Error('尚未設定 Gemini API 金鑰，請到 ⚙ 設定貼上一把。');
   const primary = store.model || fallbackModel();
   // Line up several alternatives: when a model is simply overloaded, moving
   // to the next-best one beats hammering the busy one and giving up.
@@ -735,8 +744,13 @@ async function callGemini(contents, opts = {}) {
       } catch (e) {
         lastErr = e;
         const st = e.status;
-        if (st === 400 && /API key|API_KEY/i.test(e.body || '')) throw new Error('金鑰無效，請到設定檢查。');
-        if (st === 403) throw new Error('金鑰權限不足，或此金鑰未啟用 Gemini API。');
+        // A rejected key is that key's problem, not the app's: hand over to a
+        // spare if there is one, and quote Google rather than paraphrasing it.
+        if (st === 400 && /API key|API_KEY/i.test(e.body || '')) {
+          if (!opts.pinKey && keyIdx + 1 < keys.length) { keyIdx++; continue; }
+          throw new Error(`${keyLabel(key)}無效${e.detail ? '：' + e.detail : '，請到 ⚙ 設定檢查是否貼錯或已被刪除。'}`);
+        }
+        if (st === 403) throw new Error(`${keyLabel(key)}權限不足，或此金鑰未啟用 Gemini API${e.detail ? '：' + e.detail : '。'}`);
         if (e.fatal) throw e;   // timeout / truncated / blocked: retrying won't help
         // 429 means this key is spent, not that the model is broken: sit the
         // key out and hand the work to a spare before falling back to waiting.
@@ -3157,7 +3171,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v28';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
