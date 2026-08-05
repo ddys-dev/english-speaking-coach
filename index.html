@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=35" />
+  <link rel="stylesheet" href="styles.css?v=36" />
 </head>
 <body>
   <div id="app">
@@ -341,15 +341,19 @@
         <h2 class="section-label">✍️ 自我介紹樣板 · Your Introduction</h2>
         <p class="hint" style="margin:-4px 0 14px">
           自我介紹是每場會議都要講的<b>固定資產</b>，值得一次做好、背到滾瓜爛熟。
-          AI 會產出<b>五個場合各一個樣板</b>：每個都給你可以背的<b>骨架</b>，
-          再依你選的領域填出一個真的能講的版本。備好這五個，多數場合就夠用了。
+          AI 會產出<b>七個場合各一個樣板</b>：每個都給你可以背的<b>骨架</b>，
+          再依這次的對象填出一個真的能講的版本。<b>骨架不會提到任何公司</b>，永遠可以重用；
+          <b>範例則是為這次拜訪寫的</b> —— 換對象時改①再按一次生成就好。
         </p>
 
         <div class="field">
-          <label>① 這次要用在哪個領域 · Domain</label>
+          <label>① 這次要拜訪誰 · This visit</label>
           <div class="pill-row" id="intro-domain-row"></div>
-          <input type="text" id="intro-topic" placeholder="更具體的對象或場合（選填，例：Celestial AI 的第一次視訊）" autocomplete="off" style="margin-top:8px" />
-          <p class="hint">同一組骨架換個領域就能重用，所以領域換了再生成一次即可。</p>
+          <input type="text" id="intro-topic" placeholder="對象或場合（例：Xacti 的第一次視訊、做兩相散熱的美國新創）" autocomplete="off" style="margin-top:8px" />
+          <p class="hint">
+            填了對象，範例就會針對那家公司寫（為什麼是他們、什麼引起你注意）；
+            留白則產出該領域的通用版本。<b>骨架不受影響</b>，背一次就能一直用。
+          </p>
         </div>
 
         <div class="field">
@@ -377,10 +381,10 @@
           </p>
         </div>
 
-        <button class="primary-btn" id="btn-intro-make">生成五個樣板 · Generate</button>
+        <button class="primary-btn" id="btn-intro-make">生成七個樣板 · Generate</button>
         <p id="intro-status" class="hint" style="margin-top:10px"></p>
         <div id="intro-result"></div>
-        <button class="ghost-btn" id="btn-intro-drill" hidden style="margin-top:12px">🎤 五個都練一輪 · Practise all</button>
+        <button class="ghost-btn" id="btn-intro-drill" hidden style="margin-top:12px">🎤 七個都練一輪 · Practise all</button>
       </section>
 
       <!-- ===== MEETING SKELETON =====
@@ -569,6 +573,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=35"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>

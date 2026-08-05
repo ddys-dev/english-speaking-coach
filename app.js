@@ -2872,6 +2872,14 @@ const INTRO_TEMPLATES = [
   { id: 'social', label: '破冰版', en: 'The networking intro', sec: '約 20 秒',
     when: '展會攤位、晚宴、咖啡時間',
     goal: 'Lighter and conversational, no job-title jargon, and it ends with a question back to them.' },
+  // Not introductions of a person so much as of a meeting and of a visit —
+  // but they open the same way and are prepared the same way.
+  { id: 'chair', label: '主持開場', en: 'Chairing the meeting', sec: '約 60–90 秒',
+    when: '這場會議由你主持:致謝、自我介紹、說明會議緣由、提議程、交棒同事',
+    goal: 'The full chair\'s opening, in this order: thank them for their time; say who you are and what your team does; explain WHY this meeting is happening and who arranged it; propose how the session will run and check that works for them; then hand over to a named colleague. Five moves, each one or two sentences — this is the longest template and the one with the most structure.' },
+  { id: 'host', label: '接待陪同', en: 'Hosting a visitor', sec: '零散短句',
+    when: '展會或活動接待來賓:寒暄、遞伴手禮、確認需求、安排行程',
+    goal: 'Not one paragraph but 5-6 SHORT separate lines, each on its own line: greeting them and saying you are their liaison for the day; offering something practical (water, a seat, where to stand); presenting a gift; checking what they would like to do next (exhibition or lunch); and one line for filling a gap gracefully while they wait. Warm and easy — this is hospitality, not business.' },
 ];
 $('btn-intro').onclick = () => {
   $('intro-status').textContent = '';
@@ -2951,7 +2959,7 @@ $('btn-intro-make').onclick = async () => {
   const status = (t) => { $('intro-status').textContent = t; };
   try {
     $('btn-intro-make').disabled = true;
-    stop = startTicker(status, 'AI 打磨五個樣板中…');
+    stop = startTicker(status, 'AI 打磨七個樣板中…');
     const out = await callGemini([{ role: 'user', parts: [{ text:
 `A non-native English speaker who works in corporate strategy and investment wrote this rough description of themselves. It may be in Chinese.
 
@@ -2976,6 +2984,8 @@ THE EXAMPLE MUST BE SPEAKABLE END TO END. Never leave an unfilled slot like [Nam
 Use the learner's real facts wherever they gave them. Where a detail was never supplied, put a plausible, ordinary sample inside the brackets rather than leaving it empty — it is clearly marked as replaceable, so a sample helps and an empty slot does not. Do not state invented facts outside brackets.
 
 Natural spoken English, first person. Contractions are good; written-essay English is not.
+
+WHAT IS CONSTANT AND WHAT CHANGES: the skeleton is theirs for good — it must not mention this domain or this counterpart at all, so it still fits the next company they visit. The example is for THIS visit only. ${topic ? `So the examples must be visibly about "${topic}": at minimum the 標準版, 來意版 and 主持開場 need a specific line connecting to this counterpart — what they do, what caught the learner's attention, what makes them worth meeting. A generic example that would fit any company has failed this.` : `No specific counterpart was named, so make the examples concrete to ${introDomain} rather than generic — a real kind of company in that field, a real thing worth meeting them about.`}
 
 The situations:
 ${INTRO_TEMPLATES.map((t, i) => `${i + 1}. id "${t.id}" — ${t.en} (${t.sec}), used when: ${t.when}. ${t.goal}`).join('\n')}
@@ -3737,7 +3747,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
