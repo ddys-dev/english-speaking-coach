@@ -10,6 +10,8 @@ const LS = {
   keyName: 'sp_apikey_name',
   keys:  'sp_apikeys',
   skeleton: 'sp_skeleton',
+  packs: 'sp_packs',
+  currentPack: 'sp_current_pack',
   keyUsage: 'sp_key_usage',
   thrifty: 'sp_thrifty',
   model: 'sp_model',
@@ -299,6 +301,29 @@ const STAGE_SETS = {
     { id: 'summary',    zh: '總結',       en: 'Wrap-up & Summary',
       goal: 'The learner summarises what was covered, confirms decisions and action items, and closes the meeting.' },
   ],
+  /* The two work modules were only a sentence apart, and both ran the meeting
+     stages — so "asking questions" and "meeting discussion" practised the same
+     thing. They are different skills and now have different arcs. */
+  ask: [
+    { id: 'opening',    zh: '開場',       en: 'Opening',
+      goal: 'The learner opens, says who they are and what they want to understand today, and hands over.' },
+    { id: 'questions',  zh: '基礎提問',   en: 'Groundwork questions',
+      goal: 'The learner establishes the basics — what the thing is, how it works, where it stands. Answer these plainly.' },
+    { id: 'probing',    zh: '深入追問',   en: 'Digging in',
+      goal: 'The learner must extract what you did not volunteer: numbers, evidence, risks, what breaks at scale. Your first answer to any hard question is general and comfortable — give the specifics only when they actually press for them.' },
+    { id: 'summary',    zh: '確認與總結', en: 'Confirm & close',
+      goal: 'The learner plays back what they heard, checks they got it right, and agrees a next step.' },
+  ],
+  discuss: [
+    { id: 'opening',    zh: '開場與議題', en: 'Opening & framing',
+      goal: 'The learner opens and frames the question on the table. You add the context that makes it a real decision.' },
+    { id: 'stance',     zh: '表明立場',   en: 'Stating a position',
+      goal: 'The learner states where they stand and why. Ask what it rests on — do not agree yet.' },
+    { id: 'clash',      zh: '交鋒',       en: 'Disagreement',
+      goal: 'You hold a clear opposing position and argue it. Make the learner defend, concede a point, or negotiate. Do not fold just because they pushed once — concede only to an argument that actually answers yours.' },
+    { id: 'landing',    zh: '收斂結論',   en: 'Landing it',
+      goal: 'The learner drives to something both sides can live with, and names who does what next.' },
+  ],
   travel: [
     { id: 'request',  zh: '提出需求', en: 'Make your request',
       goal: 'The learner opens politely and states clearly what they need — a room, a table, directions, a ticket.' },
@@ -340,7 +365,7 @@ const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) 
 const hasCJK = (s) => /[㐀-龿]/.test(s);
 
 /* ---------- Screen navigation ---------- */
-const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','cards','recall','intro','skeleton','progress','history','settings'];
+const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','packs','cards','recall','intro','skeleton','progress','history','settings'];
 function show(name, push = true) {
   SCREENS.forEach(s => $('screen-' + s).classList.toggle('active', s === name));
   if (push && state.screenStack[state.screenStack.length - 1] !== name) state.screenStack.push(name);
@@ -416,9 +441,15 @@ function openScenario(catId) {
   const mr = $('module-row'); mr.innerHTML = '';
   Object.entries(MODULES).forEach(([id, m]) => {
     const p = el('button', 'pill' + (id === state.module ? ' active' : ''), `${m.title} · ${m.en}`);
-    p.onclick = () => { state.module = id; [...mr.children].forEach(x => x.classList.remove('active')); p.classList.add('active'); };
+    p.onclick = () => {
+      state.module = id;
+      [...mr.children].forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      renderModuleStages();
+    };
     mr.appendChild(p);
   });
+  renderModuleStages();
 
   // domains
   const dr = $('domain-row'); dr.innerHTML = '';
@@ -452,6 +483,20 @@ function openScenario(catId) {
   show('scenario');
 }
 
+/* Two modules that looked identical on this screen were, until v32, nearly
+   identical in practice too. Show the route each one takes before it is
+   chosen — the difference is the point. */
+function renderModuleStages() {
+  const box = $('module-stages');
+  if (!box) return;
+  const set = STAGE_SETS[state.module === 'ask' ? 'ask' : 'discuss'];
+  box.innerHTML = '';
+  box.appendChild(el('span', null, set.map(s => s.zh).join(' → ')));
+  box.appendChild(el('span', 'module-note', state.module === 'ask'
+    ? '對方只答你問的，數字要追問才給。'
+    : '對方有自己的立場，會反駁到你講出理由為止。'));
+}
+
 $('btn-start').onclick = () => {
   if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
   state.customContext = $('custom-context').value.trim();
@@ -473,8 +518,8 @@ async function generatePreparedScenario() {
 
   const workProfile = `The learner works in the Strategic Investment team of a large electronics group. Their job: source targets, open partnership conversations, and interview potential companies and partners across ${state.domain}. In Medical CDMO, key customers include Medtronic and Johnson & Johnson.`;
   const modeLine = state.module === 'ask'
-    ? 'The learner will mostly be ASKING questions and doing due diligence.'
-    : 'The learner will be taking part in a MEETING DISCUSSION, stating and defending views.';
+    ? `The learner will be INTERVIEWING this counterpart: opening, establishing the basics, then digging for the numbers and risks the counterpart would rather gloss over, and finally confirming what they heard. Give the counterpart something worth extracting — a figure that sounds fine until questioned, a claim that rests on one customer, a risk they downplay. Make questionIdeas a ladder from basic to hard to dodge.`
+    : `The learner will be in a WORKING DISCUSSION as a peer: framing the question, stating a position, disagreeing, and landing on next steps. So the material must contain a genuine two-sided decision on which reasonable people differ — not a company profile. Say what the counterpart's own position is and why they hold it, and make questionIdeas the challenges the learner should be ready to answer.`;
 
   const brief = isWork
     ? `Build a realistic business meeting for this learner.
@@ -505,11 +550,12 @@ ${shape}` }] }], { json: true, temperature: 0.75, timeoutMs: 120000 });
 
     const pkg = parseJson(raw);
     state.mode = 'doc';
-    state.stageSet = isWork ? 'meeting' : 'travel';
+    state.stageSet = isWork ? (state.module === 'ask' ? 'ask' : 'discuss') : 'travel';
     state.article = pkg;
     state.stageIndex = 0;
     state.customContext = target;
     state.source = { kind: isWork ? 'work' : 'travel', name: target || state.domain };
+    savePack(isWork ? 'work' : 'travel');
     status('');
     renderArticle();
     show('article');
@@ -1165,7 +1211,10 @@ ${SCENARIO_SHAPE}` });
     state.source = sourceMeta;
     state.article = pkg;
     state.stageIndex = 0;
+    // A document meeting is a meeting, whatever the last session happened to be.
+    state.stageSet = 'meeting';
     state.customContext = goal;
+    savePack('doc');
     status('');
     renderArticle();
     show('article');
@@ -1176,6 +1225,95 @@ ${SCENARIO_SHAPE}` });
     $('btn-generate').disabled = false;
   }
 }
+
+/* ---------- Saved briefs ----------
+   A generated scenario used to live only in memory: leave the screen — to
+   practise it in the Gemini app, or just to answer a message — and it was
+   gone. But nobody memorises a briefing on one read. It has to still be there
+   when they come back, and reachable mid-session when a phrase escapes them. */
+function getPacks() { try { const v = JSON.parse(localStorage.getItem(LS.packs)); return Array.isArray(v) ? v : []; } catch { return []; } }
+function setPacks(v) { try { localStorage.setItem(LS.packs, JSON.stringify((v || []).slice(0, 20))); } catch {} }
+
+function savePack(kind) {
+  const a = state.article;
+  if (!a) return;
+  const now = Date.now();
+  const pack = {
+    id: 'p_' + now + '_' + Math.random().toString(36).slice(2, 7),
+    ts: now, updatedAt: now, kind,
+    title: a.titleZh || a.title || (state.source?.name || '情境'),
+    stageSet: state.stageSet, module: state.module, domain: state.domain,
+    difficulty: state.difficulty, customContext: state.customContext,
+    source: state.source, article: a,
+  };
+  setPacks([pack, ...getPacks()]);
+  localStorage.setItem(LS.currentPack, pack.id);
+  if (syncEnabled()) syncNow(true);
+  return pack.id;
+}
+
+function openPack(id) {
+  const pk = getPacks().find(x => x.id === id);
+  if (!pk) return;
+  state.mode = 'doc';
+  state.article = pk.article;
+  state.stageSet = pk.stageSet || 'meeting';
+  state.module = pk.module || state.module;
+  state.domain = pk.domain || state.domain;
+  state.difficulty = pk.difficulty || state.difficulty;
+  state.customContext = pk.customContext || '';
+  state.source = pk.source || null;
+  state.stageIndex = 0;
+  localStorage.setItem(LS.currentPack, pk.id);
+  renderArticle();
+  show('article');
+}
+
+/* Reopening the app mid-preparation should not lose the brief either. */
+function restoreCurrentPack() {
+  const id = localStorage.getItem(LS.currentPack);
+  if (!id || state.article) return;
+  const pk = getPacks().find(x => x.id === id);
+  if (!pk) return;
+  state.article = pk.article;
+  state.stageSet = pk.stageSet || 'meeting';
+  state.source = pk.source || null;
+  state.customContext = pk.customContext || '';
+}
+
+const PACK_KINDS = { work: '💼 工作', travel: '🧳 旅遊', doc: '📄 文件' };
+function renderPacks() {
+  const list = $('packs-list');
+  const packs = getPacks();
+  list.innerHTML = '';
+  if (!packs.length) {
+    list.innerHTML = '<div class="empty">還沒有講稿。用「準備後練習」或「文件情境練習」生成一份，就會自動存在這裡。</div>';
+    return;
+  }
+  packs.forEach(pk => {
+    const row = el('div', 'pack-item');
+    const main = el('div', 'pack-main');
+    main.appendChild(el('div', 'pack-title', pk.title));
+    const bits = [PACK_KINDS[pk.kind] || '', pk.domain || '', pk.source?.name || ''].filter(Boolean);
+    main.appendChild(el('div', 'card-meta', bits.join(' · ')));
+    main.appendChild(el('div', 'card-meta', new Date(pk.ts).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })));
+    main.onclick = () => openPack(pk.id);
+    row.appendChild(main);
+
+    const del = el('button', 'card-btn', '🗑');
+    del.onclick = (e) => {
+      e.stopPropagation();
+      if (!confirm(`刪除講稿「${pk.title}」？`)) return;
+      setPacks(getPacks().filter(x => x.id !== pk.id));
+      tombstonePack(pk.id);
+      renderPacks();
+      if (syncEnabled()) syncNow(true);
+    };
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+$('btn-packs').onclick = () => { renderPacks(); show('packs'); };
 
 function renderArticle() {
   const a = state.article, c = $('article-content');
@@ -1398,9 +1536,13 @@ RULES:
 - Keep each reply short: 2-4 sentences, and end most replies in a way that invites the learner to speak again.
 - Stay inside the CURRENT STAGE. Do not race ahead; the learner advances stages themselves.
 - Draw on the material: reference real details from it so the learner must engage with the content.
-${state.stageSet === 'travel'
-  ? '- Speak like a real member of staff or local, not a teacher: normal pace, contractions, everyday phrasing. Do not simplify unless they ask you to repeat.\n- Never solve a problem for the learner. If they go quiet, wait or repeat once — make them handle it.'
-  : '- Push back when their reasoning is thin, and make them justify a claim rather than accepting it.'}
+${{
+  travel: '- Speak like a real member of staff or local, not a teacher: normal pace, contractions, everyday phrasing. Do not simplify unless they ask you to repeat.\n- Never solve a problem for the learner. If they go quiet, wait or repeat once — make them handle it.',
+  // Being asked questions and being argued with call for opposite behaviour:
+  // one withholds until pressed, the other pushes until answered.
+  ask: '- You are being interviewed. Answer what was asked and stop — never volunteer the number, the risk or the caveat they did not ask for.\n- Keep the first answer to a hard question general and comfortable ("it varies", "broadly in line with the market"). Give real specifics only once they press with a sharper question.\n- If they accept a vague answer and move on, let them: that is the mistake they are here to notice.',
+  discuss: '- Hold a clear position of your own and argue it. You are a peer in this discussion, not a witness being questioned.\n- Push back when their reasoning is thin, and make them justify a claim rather than accepting it.\n- Do not concede to politeness or persistence — only to an argument that actually answers yours. Then say what changed your mind.',
+}[state.stageSet] || '- Push back when their reasoning is thin, and make them justify a claim rather than accepting it.'}
 - If the learner's contribution for this stage is thin, nudge them once with a concrete prompt rather than moving on.
 - RESCUE MODE: If the learner writes in Chinese (they are stuck), stop role-playing for that turn and coach: give 1-2 natural English ways to say what they meant with a short note on nuance, invite them to try it aloud, then resume the role-play in English on the next line. Rescue turns are help, not performance.
 - Begin the CURRENT STAGE now with one short line that hands the floor to the learner.`;
@@ -1414,6 +1556,11 @@ const STAGE_REF = {
   questions:  ['questionIdeas', 'keyPoints', 'glossary', 'openingHints'],
   discussion: ['keyPoints', 'questionIdeas', 'glossary', 'openingHints'],
   summary:    ['keyPoints', 'glossary', 'questionIdeas', 'openingHints'],
+  // work — asking vs discussing
+  probing:    ['questionIdeas', 'keyPoints', 'glossary', 'openingHints'],
+  stance:     ['keyPoints', 'questionIdeas', 'glossary', 'openingHints'],
+  clash:      ['keyPoints', 'questionIdeas', 'glossary', 'openingHints'],
+  landing:    ['keyPoints', 'glossary', 'questionIdeas', 'openingHints'],
   // travel
   request:    ['openingHints', 'survivalPhrases', 'glossary', 'keyPoints'],
   listen:     ['survivalPhrases', 'glossary', 'keyPoints', 'questionIdeas'],
@@ -3282,6 +3429,17 @@ function setDeleted(d) { localStorage.setItem(DEL_KEY, JSON.stringify(d)); }
    phrase harvested on the phone and on the laptop are two different ids. */
 function getDeletedCards() { try { return JSON.parse(localStorage.getItem(CARD_DEL_KEY)) || { ids: [], at: {} }; } catch { return { ids: [], at: {} }; } }
 function setDeletedCards(d) { localStorage.setItem(CARD_DEL_KEY, JSON.stringify(d)); }
+const PACK_DEL_KEY = 'sp_packs_deleted';
+function getDeletedPacks() { try { return JSON.parse(localStorage.getItem(PACK_DEL_KEY)) || { ids: [], at: {} }; } catch { return { ids: [], at: {} }; } }
+function setDeletedPacks(d) { localStorage.setItem(PACK_DEL_KEY, JSON.stringify(d)); }
+function tombstonePack(id) {
+  if (!id) return;
+  const d = getDeletedPacks();
+  if (!d.ids.includes(id)) d.ids.push(id);
+  d.at[id] = Date.now();
+  setDeletedPacks(d);
+}
+
 function tombstoneCard(text) {
   const k = cardKey(text); if (!k) return;
   const d = getDeletedCards();
@@ -3312,6 +3470,7 @@ async function cloudPull() {
   doc.sessions = doc.sessions || []; doc.deleted = doc.deleted || []; doc.deletedAt = doc.deletedAt || {};
   // A repo written by an older build has no cards; that is empty, not a wipe.
   doc.cards = Array.isArray(doc.cards) ? doc.cards : []; doc.cardsDeleted = doc.cardsDeleted || []; doc.cardsDeletedAt = doc.cardsDeletedAt || {};
+  doc.packs = Array.isArray(doc.packs) ? doc.packs : []; doc.packsDeleted = doc.packsDeleted || []; doc.packsDeletedAt = doc.packsDeletedAt || {};
   return { doc, sha: data.sha };
 }
 async function cloudPush(doc, sha) {
@@ -3383,20 +3542,38 @@ function mergeCards(A, B, now = Date.now()) {
   const at = {}; ids.forEach(k => { if (tomb.at[k]) at[k] = tomb.at[k]; });
   return { cards, cardsDeleted: ids, cardsDeletedAt: at };
 }
+/* Briefs follow the learner too: generated on the laptop, practised on the
+   phone. Same id-and-timestamp rule as sessions. */
+function mergePacks(A, B, now = Date.now()) {
+  const tomb = mergeTomb({ ids: A?.packsDeleted, at: A?.packsDeletedAt },
+                         { ids: B?.packsDeleted, at: B?.packsDeletedAt }, now);
+  const del = new Set(tomb.ids);
+  const byId = new Map();
+  for (const pk of [...(A?.packs || []), ...(B?.packs || [])]) {
+    if (!pk || !pk.id || del.has(pk.id)) continue;
+    const prev = byId.get(pk.id);
+    if (!prev || (pk.updatedAt || pk.ts || 0) >= (prev.updatedAt || prev.ts || 0)) byId.set(pk.id, pk);
+  }
+  const packs = Array.from(byId.values()).sort((x, y) => (y.ts || 0) - (x.ts || 0)).slice(0, 20);
+  return { packs, packsDeleted: tomb.ids, packsDeletedAt: tomb.at };
+}
 function mergeDoc(A, B, now = Date.now()) {
-  return { ...mergeSessions(A, B, now), ...mergeCards(A, B, now) };
+  return { ...mergeSessions(A, B, now), ...mergeCards(A, B, now), ...mergePacks(A, B, now) };
 }
 
 function localDoc() {
-  const d = getDeleted(), cd = getDeletedCards();
+  const d = getDeleted(), cd = getDeletedCards(), pd = getDeletedPacks();
   return { sessions: store.history, deleted: d.ids, deletedAt: d.at,
-           cards: store.cards, cardsDeleted: cd.ids, cardsDeletedAt: cd.at };
+           cards: store.cards, cardsDeleted: cd.ids, cardsDeletedAt: cd.at,
+           packs: getPacks(), packsDeleted: pd.ids, packsDeletedAt: pd.at };
 }
 function applyDoc(doc) {
   store.history = (doc.sessions || []).slice(0, 500);
   setDeleted({ ids: doc.deleted || [], at: doc.deletedAt || {} });
   store.cards = doc.cards || [];
   setDeletedCards({ ids: doc.cardsDeleted || [], at: doc.cardsDeletedAt || {} });
+  setPacks(doc.packs || []);
+  setDeletedPacks({ ids: doc.packsDeleted || [], at: doc.packsDeletedAt || {} });
 }
 function setSyncStatus(t) { const e = $('sync-status'); if (e) e.textContent = t; }
 
@@ -3474,6 +3651,7 @@ $('import-file').onchange = async function () {
    INIT
    ============================================================ */
 migrateHistory();
+restoreCurrentPack();
 renderHome();
 loadSettings();
 show('home', false);
@@ -3482,7 +3660,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v31';
+const APP_VERSION = 'v33';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');

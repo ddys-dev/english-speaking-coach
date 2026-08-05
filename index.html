@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=31" />
+  <link rel="stylesheet" href="styles.css?v=33" />
 </head>
 <body>
   <div id="app">
@@ -53,6 +53,7 @@
         </div>
 
         <div class="home-actions">
+          <button class="ghost-btn" id="btn-packs">📑 我的講稿 Briefs</button>
           <button class="ghost-btn" id="btn-cards">📇 語料庫 Phrase Bank</button>
           <button class="ghost-btn" id="btn-progress">📈 進步追蹤 Progress</button>
           <button class="ghost-btn" id="btn-history">📚 練習紀錄 History</button>
@@ -66,6 +67,7 @@
         <div class="field">
           <label>練習模組 · Module</label>
           <div class="pill-row" id="module-row"></div>
+          <p class="hint" id="module-stages"></p>
         </div>
 
         <div class="field" id="domain-field">
@@ -321,6 +323,19 @@
         <div id="recall-body"></div>
       </section>
 
+      <!-- ===== SAVED BRIEFS =====
+           Generated scenarios persist here: the brief is meant to be carried
+           to the Gemini app and back, and consulted mid-session. -->
+      <section id="screen-packs" class="screen">
+        <h2 class="section-label">📑 我的講稿 · Saved Briefs</h2>
+        <p class="hint" style="margin:-4px 0 14px">
+          每次生成的情境包都會自動存在這裡，點一下就能重新打開 ——
+          可以直接開始練習、匯出給 Gemini Live、或只是把詞彙和該問的問題再看一遍。
+          開啟雲端同步的話，電腦上生成的講稿手機也拿得到。
+        </p>
+        <div id="packs-list"></div>
+      </section>
+
       <!-- ===== SELF-INTRODUCTION ===== -->
       <section id="screen-intro" class="screen">
         <h2 class="section-label">✍️ 自我介紹樣板 · Your Introduction</h2>
@@ -534,6 +549,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>

@@ -117,6 +117,16 @@ textarea:focus, input:focus, select:focus { outline: none; border-color: var(--a
 .usage-row .u-name { color: var(--text); font-weight: 600; }
 .usage-row .u-cool { color: #fbbf24; }
 .meta { font-size: 12px; color: var(--muted); font-weight: 400; }
+/* Saved brief rows: the whole row opens it, the bin does not. */
+.pack-item {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card); border: 1px solid rgba(148,163,184,.2);
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+}
+.pack-item .pack-main { flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.pack-item .pack-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+#module-stages { display: flex; flex-direction: column; gap: 3px; }
+#module-stages .module-note { color: var(--accent); opacity: .85; }
 /* One phrase in the meeting skeleton, separated from its neighbours. */
 .skel-item {
   padding: 10px 0 4px;
