@@ -92,6 +92,19 @@ function activeKey() {
   const keys = store.keyEntries.map(e => e.key);
   return keys.find(k => !keyCooling(k)) || keys[0] || '';
 }
+/* Most bad keys are bad in one of a few obvious ways, and the app can see that
+   without asking Google — including the one this project invites: a GitHub
+   token pasted where a Gemini key goes. */
+function keyLooksWrong(key) {
+  const k = String(key || '');
+  if (!k) return '';
+  if (/^gh[pousr]_|^github_pat_/.test(k)) return '這看起來是 GitHub 權杖，不是 Gemini 金鑰（Gemini 金鑰以 AIza 或 AQ. 開頭）';
+  if (/\s/.test(k)) return '中間有空白或換行，可能複製時多帶了字元';
+  if (k.length < 30) return `只有 ${k.length} 個字元，看起來沒貼完整`;
+  if (!/^AIza|^AQ\./.test(k)) return '開頭不是 AIza 或 AQ.，可能不是 Gemini 金鑰';
+  return '';
+}
+
 /* Name the key an error belongs to, so "which one do I go fix?" has an answer. */
 function keyLabel(key) {
   const entries = store.keyEntries;
@@ -2778,6 +2791,12 @@ function renderUsage() {
       `今日 ${keyUses(e.key)} 次 ｜ ` + (cooling ? `冷卻中 ${Math.ceil(cooling / 60000)} 分` : '可用'));
     row.append(left, right);
     box.appendChild(row);
+    const wrong = keyLooksWrong(e.key);
+    if (wrong) {
+      const warn = el('div', 'usage-row u-cool');
+      warn.textContent = `⚠️ ${e.name || `金鑰${i + 1}`}：${wrong}`;
+      box.appendChild(warn);
+    }
   });
 }
 
@@ -2901,6 +2920,11 @@ $('btn-test-api').onclick = async () => {
   out.textContent = '測試中…';
   const lines = [];
   if (typed.length > 1) lines.push(`共 ${typed.length} 把金鑰，以第 1 把測試模型清單。`);
+  // Say what is visibly wrong before spending a round trip to be told so.
+  typed.forEach((k, i) => {
+    const w = keyLooksWrong(k);
+    if (w) lines.push(`⚠️ 第 ${i + 1} 把：${w}`);
+  });
 
   // Ask the key what it is entitled to before testing anything.
   let available = [];
@@ -3171,7 +3195,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
