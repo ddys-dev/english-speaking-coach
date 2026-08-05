@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=34" />
+  <link rel="stylesheet" href="styles.css?v=35" />
 </head>
 <body>
   <div id="app">
@@ -353,12 +353,27 @@
         </div>
 
         <div class="field">
-          <label>② 你想講什麼？（中文、破英文都可以）</label>
+          <label>② 你的英文稱呼 · Your name</label>
+          <input type="text" id="intro-name" placeholder="例：Katty" autocomplete="off" />
+          <p class="hint">填了範例才唸得完整 —— 不然開頭永遠卡在 <code>I'm [Name]</code>。</p>
+        </div>
+
+        <div class="field">
+          <label>③ 你想講什麼？（中文、破英文都可以）</label>
           <button class="ghost-btn" id="btn-intro-draft" style="margin-bottom:8px">✨ 幫我擬一版草稿</button>
           <textarea id="intro-input" rows="5" placeholder="例：我在一家電子集團的策略投資部門，負責找光通訊、散熱、先進封裝的標的，也談合作。"></textarea>
           <p class="hint">
             懶得從頭寫就按上面那顆 —— AI 會依你選的領域擬一版，不知道的地方用
             <code>[方括號]</code> 留白，你直接改成實際情況即可。改好的內容會記住，下次自動帶入。
+          </p>
+        </div>
+
+        <div class="field">
+          <label>④ 你現在在用的版本（選填，但強烈建議）</label>
+          <textarea id="intro-ref" rows="4" placeholder="貼上你目前實際在講的自我介紹 —— 中英文都可以，草稿、舊版本、講稿片段都行。"></textarea>
+          <p class="hint">
+            貼了之後，AI 會照<b>你的句構與語氣</b>來寫，而不是它自己的風格；
+            也會順手把裡面的文法與不道地的地方修掉。只存在本機，貼一次就記住。
           </p>
         </div>
 
@@ -554,6 +569,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

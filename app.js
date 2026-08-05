@@ -13,6 +13,8 @@ const LS = {
   packs: 'sp_packs',
   currentPack: 'sp_current_pack',
   profile: 'sp_profile',
+  name: 'sp_name',
+  reference: 'sp_reference',
   keyUsage: 'sp_key_usage',
   thrifty: 'sp_thrifty',
   model: 'sp_model',
@@ -54,6 +56,12 @@ const store = {
   // that needs to know — the introduction templates and the meeting skeleton.
   get profile() { return localStorage.getItem(LS.profile) || ''; },
   set profile(v){ localStorage.setItem(LS.profile, v || ''); },
+  get name()   { return localStorage.getItem(LS.name) || ''; },
+  set name(v)  { localStorage.setItem(LS.name, v || ''); },
+  // What they already say in real meetings. Better raw material than any
+  // description of themselves: it carries their sentence shapes and register.
+  get reference()  { return localStorage.getItem(LS.reference) || ''; },
+  set reference(v) { localStorage.setItem(LS.reference, v || ''); },
   get thrifty() { return localStorage.getItem(LS.thrifty) === 'on'; },
   set thrifty(v){ localStorage.setItem(LS.thrifty, v ? 'on' : 'off'); },
   // No hard-coded default that can be retired out from under us — an alias
@@ -2871,6 +2879,8 @@ $('btn-intro').onclick = () => {
   $('btn-intro-drill').hidden = true;
   // What they wrote last time is almost always what they want this time.
   if (!$('intro-input').value.trim()) $('intro-input').value = store.profile;
+  if (!$('intro-name').value.trim()) $('intro-name').value = store.name;
+  if (!$('intro-ref').value.trim()) $('intro-ref').value = store.reference;
   renderIntroDomains();
   show('intro');
 };
@@ -2895,6 +2905,7 @@ $('btn-intro-draft').onclick = async () => {
 Domain for this meeting: ${introDomain}.
 ${topic ? `The specific occasion: ${topic}` : ''}
 ${store.profile ? `What they have said about themselves before — reuse these facts, they are true:\n"${store.profile}"` : 'Nothing is known about them yet beyond the domain.'}
+${store.reference ? `Introductions they actually use in real meetings — the facts in here are true, draw on them:\n"""\n${store.reference}\n"""` : ''}
 
 Write it in Traditional Chinese, first person, 2-4 sentences, as rough notes — this is raw material for an English introduction, not the introduction itself.
 
@@ -2932,6 +2943,8 @@ $('btn-intro-make').onclick = async () => {
   if (raw.length < 10) { $('intro-status').textContent = '⚠️ 請先寫幾句你想表達的內容，或按上面的「幫我擬一版草稿」。'; return; }
   if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
   store.profile = raw;   // remembered for next time, and for the skeleton screen
+  store.name = $('intro-name').value.trim();
+  store.reference = $('intro-ref').value.trim();
 
   const topic = $('intro-topic').value.trim();
   let stop = null;
@@ -2945,12 +2958,24 @@ $('btn-intro-make').onclick = async () => {
 "${raw}"
 
 They work in ${introDomain}.${topic ? ` This time they are preparing for: ${topic}.` : ''}
+${store.name ? `They introduce themselves as "${store.name}" — use that name in every example.` : 'They have not given a name; use a short plausible one in brackets.'}
+${$('intro-ref').value.trim() ? `
+THIS IS WHAT THEY ALREADY SAY IN REAL MEETINGS — the most important input you have:
+"""
+${$('intro-ref').value.trim()}
+"""
+Write in THIS voice, not your own. Follow the sentence shapes, the level of formality and the order of information they already use — if they name their team then its remit then the areas they cover, keep that order. Reuse their real facts: the team, the titles, the areas they list, the way they refer to colleagues.
+Do fix what is wrong in it: grammar, typos, and phrasing that reads as translated rather than spoken. Do not smooth away their voice while doing so — the goal is their introduction, correct, not a generic one.` : ''}
 
 Write FIVE self-introduction templates, one for each situation below. For each, give:
 - a SKELETON they can memorise: the sentence frame with [square-bracket slots] where the changeable parts go. The frame must survive a change of company or domain.
-- an EXAMPLE: that skeleton filled in for their actual situation, ready to say out loud.
+- an EXAMPLE: the same sentence with EVERY slot filled in, ready to say out loud right now.
 
-Natural spoken English, first person. Invent nothing beyond what they wrote — if a detail is missing, leave it as a slot rather than making it up. Contractions are good; written-essay English is not.
+THE EXAMPLE MUST BE SPEAKABLE END TO END. Never leave an unfilled slot like [Name] or [Company] in it — a half-empty example cannot be practised, which is the whole point of it. Keep the square brackets AROUND the filled-in words, so they can see at a glance what to swap next time: "I'm [${(store.name || 'Katty')}], [Investment Manager] at [Foxconn], focusing on [optical interconnect]." Brackets mark what changes; they never mark a blank.
+
+Use the learner's real facts wherever they gave them. Where a detail was never supplied, put a plausible, ordinary sample inside the brackets rather than leaving it empty — it is clearly marked as replaceable, so a sample helps and an empty slot does not. Do not state invented facts outside brackets.
+
+Natural spoken English, first person. Contractions are good; written-essay English is not.
 
 The situations:
 ${INTRO_TEMPLATES.map((t, i) => `${i + 1}. id "${t.id}" — ${t.en} (${t.sec}), used when: ${t.when}. ${t.goal}`).join('\n')}
@@ -3109,12 +3134,13 @@ $('btn-skeleton-make').onclick = async () => {
     const raw = await callGemini([{ role: 'user', parts: [{ text:
 `Build a set of ready-made English phrases for a non-native speaker to memorise before business meetings.
 ${role ? `The learner: ${role}` : 'The learner works in corporate strategy and investment, and interviews companies and partners.'}
+${store.reference ? `How they already speak in meetings — match this register and sentence shape:\n"""\n${store.reference}\n"""` : ''}
 
 These are FIXED ASSETS: phrases that recur in every meeting regardless of the topic. Keep them domain-neutral — they must work whether the meeting is about optics, packaging or medical manufacturing. No industry nouns.
 
 For each phrase give:
 - "skeleton": the frame to memorise, with [square-bracket slots] for the parts that change
-- "example": the frame filled in once, so they can hear how it lands
+- "example": the same sentence with EVERY slot filled in, speakable end to end. Keep the brackets around the filled-in words so it is obvious what to swap — "Before we dive in, I'd like to cover [the roadmap] and [the yield numbers]." Never leave an empty slot such as [topic] in an example: an example that cannot be said aloud cannot be practised. Where no real detail was given, use an ordinary sample inside the brackets.
 - "situationZh": ONE line in Traditional Chinese describing the moment that calls for it — written as a cue they will be shown WITHOUT the English, and must produce the phrase from. Concrete: what just happened in the room.
 - "watch": one thing a Chinese-speaking professional typically gets wrong here — a word order, a tense, an over-apology, something that sounds translated
 
@@ -3711,7 +3737,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v34';
+const APP_VERSION = 'v35';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
