@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=29" />
+  <link rel="stylesheet" href="styles.css?v=30" />
 </head>
 <body>
   <div id="app">
@@ -322,20 +322,29 @@
 
       <!-- ===== SELF-INTRODUCTION ===== -->
       <section id="screen-intro" class="screen">
-        <h2 class="section-label">✍️ 打造我的自我介紹 · Your Introduction</h2>
+        <h2 class="section-label">✍️ 自我介紹樣板 · Your Introduction</h2>
         <p class="hint" style="margin:-4px 0 14px">
-          自我介紹是你每場會議都要講的固定資產，值得一次打磨到滾瓜爛熟。
-          用中文寫個大概就行，AI 會產出三種長度的英文版本。
+          自我介紹是每場會議都要講的<b>固定資產</b>，值得一次做好、背到滾瓜爛熟。
+          AI 會產出<b>五個場合各一個樣板</b>：每個都給你可以背的<b>骨架</b>，
+          再依你選的領域填出一個真的能講的版本。備好這五個，多數場合就夠用了。
         </p>
 
         <div class="field">
-          <label>你想講什麼？（中文、破英文都可以）</label>
-          <textarea id="intro-input" rows="5" placeholder="例：我在鴻海策略投資部門，負責找光通訊、散熱、先進封裝的標的，也談合作。我今天想了解貴公司的技術和量產進度。"></textarea>
+          <label>① 你想講什麼？（中文、破英文都可以）</label>
+          <textarea id="intro-input" rows="5" placeholder="例：我在一家電子集團的策略投資部門，負責找光通訊、散熱、先進封裝的標的，也談合作。"></textarea>
         </div>
 
-        <button class="primary-btn" id="btn-intro-make">生成三種版本 · Generate</button>
+        <div class="field">
+          <label>② 這次要用在哪個領域 · Domain</label>
+          <div class="pill-row" id="intro-domain-row"></div>
+          <input type="text" id="intro-topic" placeholder="更具體的對象或場合（選填，例：Celestial AI 的第一次視訊）" autocomplete="off" style="margin-top:8px" />
+          <p class="hint">同一組骨架換個領域就能重用，所以領域換了再生成一次即可。</p>
+        </div>
+
+        <button class="primary-btn" id="btn-intro-make">生成五個樣板 · Generate</button>
         <p id="intro-status" class="hint" style="margin-top:10px"></p>
         <div id="intro-result"></div>
+        <button class="ghost-btn" id="btn-intro-drill" hidden style="margin-top:12px">🎤 五個都練一輪 · Practise all</button>
       </section>
 
       <!-- ===== HISTORY ===== -->
@@ -496,6 +505,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=29"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

@@ -1825,6 +1825,7 @@ function renderDrill() {
   head.appendChild(q);
   if (d.kind === 'missed') head.appendChild(p('現在換你 —— 你會怎麼追問？'));
   else if (d.kind === 'shallow') head.appendChild(p('重問一次，問得更具體、更難迴避。'));
+  else if (d.kind === 'intro') head.appendChild(p('不要看上面的範例，用自己的話講一次。講完再比對。'));
   else head.appendChild(p('用更自然的說法重講一次。'));
   if (d.why) head.appendChild(p('（追問到位能挖出：' + d.why + '）'));
   body.appendChild(head);
@@ -1850,6 +1851,8 @@ async function submitDrill() {
 
   const ctx = d.kind === 'missed'
     ? `The counterpart said: "${d.prompt}"\nThe learner's follow-up attempt: "${said}"\nA model follow-up would be: "${d.target}"`
+    : d.kind === 'intro'
+    ? `The learner is practising a self-introduction for this situation: ${d.prompt}\nWhat they said from memory: "${said}"\nThe template they were working from: "${d.target}"\n\nJudge it as a spoken introduction: does it land in the time this situation allows, is it natural rather than recited, does it cover who they are and why they are there? Matching the template word for word is NOT the goal — saying it fluently in their own words is. Say so if it is too long for the situation.`
     : `The learner originally said: "${d.prompt}"\nTheir new attempt: "${said}"\nA stronger version would be: "${d.target}"`;
 
   try {
@@ -2678,33 +2681,86 @@ $('btn-recall').onclick = () => startRecall();
 
 /* ---------- Self-introduction ----------
    The one piece of English you will say in every single meeting. Worth
-   polishing once and owning outright. */
-$('btn-intro').onclick = () => { $('intro-status').textContent = ''; $('intro-result').innerHTML = ''; show('intro'); };
+   polishing once and owning outright.
+
+   Five situations cover almost everything: being pointed at in a round of
+   introductions, opening a first call, a formal meeting that wants your
+   background, reaching out to someone cold, and a drink at a conference.
+   Each is a SKELETON to memorise plus one filled example — the frame stays,
+   only the domain changes, so five templates are the whole job. */
+const INTRO_TEMPLATES = [
+  { id: 'oneliner', label: '一句話版', en: 'The one-liner', sec: '約 10 秒',
+    when: '一輪自我介紹輪到你、電梯裡、臨時被點名',
+    goal: 'Name, role, and the one thing you look at — in a single breath. No history, no detail.' },
+  { id: 'standard', label: '標準版', en: 'The 30-second standard', sec: '約 30 秒',
+    when: '第一次視訊會議的開場，最常用的一個',
+    goal: 'Who you are, what your team does, and why you are in THIS meeting. Ends by handing over.' },
+  { id: 'full', label: '完整版', en: 'The 60-second full', sec: '約 60 秒',
+    when: '正式會議、對方明顯想知道你的來歷與份量',
+    goal: 'Background and mandate, what your group can offer a partner, what you look for, and what you hope to get from today.' },
+  { id: 'outreach', label: '來意版', en: 'Why I reached out', sec: '約 30 秒',
+    when: '你主動接觸對方、開發合作機會',
+    goal: 'Why THEM specifically — what you saw, why it matters to your group, what you would like to explore. Concrete, not flattering.' },
+  { id: 'social', label: '破冰版', en: 'The networking intro', sec: '約 20 秒',
+    when: '展會攤位、晚宴、咖啡時間',
+    goal: 'Lighter and conversational, no job-title jargon, and it ends with a question back to them.' },
+];
+$('btn-intro').onclick = () => {
+  $('intro-status').textContent = '';
+  $('intro-result').innerHTML = '';
+  $('btn-intro-drill').hidden = true;
+  renderIntroDomains();
+  show('intro');
+};
+
+let introDomain = CATEGORIES.work.domains[0];
+function renderIntroDomains() {
+  const row = $('intro-domain-row');
+  row.innerHTML = '';
+  CATEGORIES.work.domains.forEach(d => {
+    const b = el('button', 'pill' + (d === introDomain ? ' active' : ''), d);
+    b.onclick = () => { introDomain = d; renderIntroDomains(); };
+    row.appendChild(b);
+  });
+}
 
 $('btn-intro-make').onclick = async () => {
   const raw = $('intro-input').value.trim();
   if (raw.length < 10) { $('intro-status').textContent = '⚠️ 請先寫幾句你想表達的內容。'; return; }
   if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
 
+  const topic = $('intro-topic').value.trim();
   let stop = null;
   const status = (t) => { $('intro-status').textContent = t; };
   try {
     $('btn-intro-make').disabled = true;
-    stop = startTicker(status, 'AI 打磨中…');
+    stop = startTicker(status, 'AI 打磨五個樣板中…');
     const out = await callGemini([{ role: 'user', parts: [{ text:
 `A non-native English speaker who works in corporate strategy and investment wrote this rough description of themselves. It may be in Chinese.
 
 "${raw}"
 
-Turn it into a self-introduction they can actually say out loud in a business meeting. Natural spoken English, first person, no jargon they would not use themselves, nothing invented beyond what they wrote.
+They work in ${introDomain}.${topic ? ` This time they are preparing for: ${topic}.` : ''}
+
+Write FIVE self-introduction templates, one for each situation below. For each, give:
+- a SKELETON they can memorise: the sentence frame with [square-bracket slots] where the changeable parts go. The frame must survive a change of company or domain.
+- an EXAMPLE: that skeleton filled in for their actual situation, ready to say out loud.
+
+Natural spoken English, first person. Invent nothing beyond what they wrote — if a detail is missing, leave it as a slot rather than making it up. Contractions are good; written-essay English is not.
+
+The situations:
+${INTRO_TEMPLATES.map((t, i) => `${i + 1}. id "${t.id}" — ${t.en} (${t.sec}), used when: ${t.when}. ${t.goal}`).join('\n')}
 
 Return ONLY JSON:
 {
-  "oneLiner": "<a single sentence for a quick round of introductions>",
-  "short": "<about 30 seconds spoken — 3-4 sentences>",
-  "long": "<about 60 seconds spoken — who you are, what you look for, why you are in this meeting>",
-  "tips": ["<a short note in Traditional Chinese on delivery: what to stress, what to slow down on>"]
-}` }] }], { json: true, temperature: 0.6, timeoutMs: 120000 });
+  "templates": [
+    { "id": "<one of: ${INTRO_TEMPLATES.map(t => t.id).join(', ')}>",
+      "skeleton": "<the memorisable frame with [slots]>",
+      "example": "<the filled-in version they can say today>",
+      "zh": "<1-2 sentences in Traditional Chinese: when to use this one and what to stress>",
+      "watch": "<one thing non-native speakers get wrong here — a word order, a tense, a phrase that sounds translated>" }
+  ]
+}` }] }], { json: true, temperature: 0.6, timeoutMs: 180000 });
     stop(); stop = null;
     const r = parseJson(out);
     status('');
@@ -2717,33 +2773,68 @@ Return ONLY JSON:
   }
 };
 
+let introTemplates = [];
 function renderIntro(r) {
   const c = $('intro-result');
   c.innerHTML = '';
-  const versions = [
-    ['一句話版 · One-liner', r.oneLiner],
-    ['30 秒版 · Short', r.short],
-    ['60 秒版 · Full', r.long],
-  ];
-  versions.forEach(([title, text]) => {
-    if (!text) return;
+  // Keep the catalogue's order and labels; the AI only fills them in.
+  introTemplates = INTRO_TEMPLATES
+    .map(t => ({ ...t, ...(r.templates || []).find(x => x.id === t.id) }))
+    .filter(t => t.example || t.skeleton);
+  if (!introTemplates.length) { $('intro-status').textContent = '⚠️ 這次沒有生成出樣板，請再試一次。'; return; }
+
+  introTemplates.forEach((t, i) => {
     const d = el('div');
-    d.appendChild(p(text));
+    d.appendChild(el('div', 'card-meta', `${t.sec}　·　${t.when}`));
+
+    // The frame is the thing worth memorising, so it leads.
+    const sk = el('div', 'intro-skeleton');
+    sk.textContent = t.skeleton || '';
+    if (t.skeleton) { d.appendChild(el('div', 'card-meta', '骨架 · 背這個')); d.appendChild(sk); }
+
+    if (t.example) {
+      d.appendChild(el('div', 'card-meta', '這次的版本 · 直接能講'));
+      d.appendChild(p(t.example));
+    }
+    if (t.zh) d.appendChild(p(t.zh));
+    if (t.watch) d.appendChild(p('⚠️ ' + t.watch));
+
     const acts = el('div', 'live-actions');
-    const say = el('button', 'ghost-btn', '🔊 聽一次');
-    say.onclick = () => speak(text);
     const keep = el('button', 'primary-btn', '⭐ 存成必備');
     keep.onclick = () => {
-      addCards([{ text, zh: title, cat: 'intro', star: true }], '自我介紹');
-      keep.textContent = '已存入 ✓';
-      keep.disabled = true;
+      addCards([{ text: t.example || t.skeleton, zh: `自我介紹 · ${t.label}（${t.sec}）`, cat: 'intro', star: true }], '自我介紹');
+      if (t.skeleton && t.example) addCards([{ text: t.skeleton, zh: `骨架 · ${t.label}`, cat: 'intro', star: true }], '自我介紹骨架');
+      keep.textContent = '已存入 ✓'; keep.disabled = true;
     };
-    acts.append(keep, say);
+    const say = el('button', 'ghost-btn', '🔊 聽一次');
+    say.onclick = () => speak(t.example || t.skeleton);
+    const drill = el('button', 'ghost-btn', '🎤 練這個');
+    drill.onclick = () => startIntroDrills([i]);
+    acts.append(keep, say, drill);
     d.appendChild(acts);
-    c.appendChild(block(title, d));
+    c.appendChild(block(`${i + 1}. ${t.label} · ${t.en}`, d));
   });
-  if (r.tips?.length) c.appendChild(block('講的時候注意 · Delivery', list(r.tips)));
+  $('btn-intro-drill').hidden = false;
 }
+
+/* Say it out loud and be marked against the template — the phrase only becomes
+   yours at the point you can produce it without reading. */
+function startIntroDrills(indexes) {
+  const picked = (indexes || introTemplates.map((_, i) => i)).map(i => introTemplates[i]).filter(Boolean);
+  if (!picked.length) return;
+  state.drills = picked.map(t => ({
+    kind: 'intro',
+    prompt: `${t.label}（${t.sec}）— ${t.when}`,
+    target: t.example || t.skeleton,
+    why: '',
+    title: '不看稿，把自我介紹講一次',
+  }));
+  state.drillIndex = 0;
+  state.drillResults = [];
+  renderDrill();
+  show('drill');
+}
+$('btn-intro-drill').onclick = () => startIntroDrills();
 
 /* ============================================================
    SETTINGS
@@ -3195,7 +3286,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v29';
+const APP_VERSION = 'v30';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
