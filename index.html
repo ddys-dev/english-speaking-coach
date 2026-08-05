@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="SpeakPrep" />
   <!-- ?v= must match APP_VERSION in app.js and CACHE in sw.js.
        Without it a cache-first service worker keeps serving the old bundle. -->
-  <link rel="stylesheet" href="styles.css?v=30" />
+  <link rel="stylesheet" href="styles.css?v=31" />
 </head>
 <body>
   <div id="app">
@@ -302,6 +302,7 @@
           <div class="live-actions">
             <button class="primary-btn" id="btn-recall">🔁 今日複習</button>
             <button class="ghost-btn" id="btn-intro">✍️ 打造自我介紹</button>
+            <button class="ghost-btn" id="btn-skeleton">🧱 會議骨架</button>
             <button class="ghost-btn" id="btn-card-add">➕ 手動新增</button>
           </div>
         </div>
@@ -345,6 +346,34 @@
         <p id="intro-status" class="hint" style="margin-top:10px"></p>
         <div id="intro-result"></div>
         <button class="ghost-btn" id="btn-intro-drill" hidden style="margin-top:12px">🎤 五個都練一輪 · Practise all</button>
+      </section>
+
+      <!-- ===== MEETING SKELETON =====
+           The self-introduction is one of nine moments in a meeting where the
+           language is predictable. Prepare all nine and the improvising is
+           spent where it belongs: on listening and following up. -->
+      <section id="screen-skeleton" class="screen">
+        <h2 class="section-label">🧱 會議骨架 · Meeting Skeleton</h2>
+        <p class="hint" style="margin:-4px 0 14px">
+          一場會議裡有八個時刻的語言是<b>可預測</b>的 —— 從暖場到收尾
+          （第九個是<b>自我介紹</b>，在上一頁「打造自我介紹」單獨處理）。
+          把它們一次備好、背熟，開會時的腦力就能全部拿去<b>聽</b>和<b>追問</b>。
+          這些句子<b>與領域無關</b>，生成一次就永久有效，之後靠語料庫的複習維持。
+        </p>
+
+        <div class="field">
+          <label>你的角色（選填，填了句子會更貼近你）</label>
+          <textarea id="skeleton-role" rows="2" placeholder="例：我在一家電子集團的策略投資部門，負責找標的、談合作。"></textarea>
+        </div>
+
+        <button class="primary-btn" id="btn-skeleton-make">生成整套骨架 · Generate</button>
+        <p id="skeleton-status" class="hint" style="margin-top:10px"></p>
+        <div id="skeleton-result"></div>
+        <div class="feedback-actions" id="skeleton-actions" hidden>
+          <button class="primary-btn" id="btn-skeleton-drill">🎤 整場走一遍 · Run the whole meeting</button>
+          <button class="ghost-btn" id="btn-skeleton-save">⭐ 全部存進語料庫</button>
+          <button class="ghost-btn" id="btn-skeleton-clear">🗑 清掉重新生成</button>
+        </div>
       </section>
 
       <!-- ===== HISTORY ===== -->
@@ -505,6 +534,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=30"></script>
+  <script src="app.js?v=31"></script>
 </body>
 </html>

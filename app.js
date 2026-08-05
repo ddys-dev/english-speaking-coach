@@ -9,6 +9,7 @@ const LS = {
   key:   'sp_apikey',
   keyName: 'sp_apikey_name',
   keys:  'sp_apikeys',
+  skeleton: 'sp_skeleton',
   keyUsage: 'sp_key_usage',
   thrifty: 'sp_thrifty',
   model: 'sp_model',
@@ -129,11 +130,15 @@ function rotationKeys() {
    ============================================================ */
 const CARD_CATS = {
   intro:    '自我介紹',
+  smalltalk:'暖場閒聊',
   opening:  '開場',
+  transition:'轉場銜接',
+  clarify:  '聽不懂求救',
   asking:   '提問',
   probing:  '追問挖深',
   opinion:  '表達意見',
   pushback: '反駁與協商',
+  deflect:  '擋球與閃避',
   summary:  '總結收尾',
   travel:   '旅遊救命句',
   term:     '專業術語',
@@ -335,7 +340,7 @@ const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) 
 const hasCJK = (s) => /[㐀-龿]/.test(s);
 
 /* ---------- Screen navigation ---------- */
-const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','cards','recall','intro','progress','history','settings'];
+const SCREENS = ['home','scenario','source','article','live','review','chat','drill','feedback','cards','recall','intro','skeleton','progress','history','settings'];
 function show(name, push = true) {
   SCREENS.forEach(s => $('screen-' + s).classList.toggle('active', s === name));
   if (push && state.screenStack[state.screenStack.length - 1] !== name) state.screenStack.push(name);
@@ -1826,6 +1831,7 @@ function renderDrill() {
   if (d.kind === 'missed') head.appendChild(p('現在換你 —— 你會怎麼追問？'));
   else if (d.kind === 'shallow') head.appendChild(p('重問一次，問得更具體、更難迴避。'));
   else if (d.kind === 'intro') head.appendChild(p('不要看上面的範例，用自己的話講一次。講完再比對。'));
+  else if (d.kind === 'template') head.appendChild(p('用英文講出你會說的話。憑印象講就好，講完再比對。'));
   else head.appendChild(p('用更自然的說法重講一次。'));
   if (d.why) head.appendChild(p('（追問到位能挖出：' + d.why + '）'));
   body.appendChild(head);
@@ -1851,6 +1857,8 @@ async function submitDrill() {
 
   const ctx = d.kind === 'missed'
     ? `The counterpart said: "${d.prompt}"\nThe learner's follow-up attempt: "${said}"\nA model follow-up would be: "${d.target}"`
+    : d.kind === 'template'
+    ? `The learner is drilling a meeting phrase they have prepared. The situation they were given (in Chinese): ${d.prompt}\nWhat they said: "${said}"\nThe phrase they prepared for this moment: "${d.target}"\n\nJudge whether what they said would actually work at that moment in a real business meeting: is it natural spoken English, does it do the job the moment requires, is the register right for a senior person — not obsequious, not blunt? Their own wording is fine and often better than the prepared one; do NOT mark them down for deviating from it. Mark them down for sounding translated, over-apologising, or missing what the moment needed.`
     : d.kind === 'intro'
     ? `The learner is practising a self-introduction for this situation: ${d.prompt}\nWhat they said from memory: "${said}"\nThe template they were working from: "${d.target}"\n\nJudge it as a spoken introduction: does it land in the time this situation allows, is it natural rather than recited, does it cover who they are and why they are there? Matching the template word for word is NOT the goal — saying it fluently in their own words is. Say so if it is too long for the situation.`
     : `The learner originally said: "${d.prompt}"\nTheir new attempt: "${said}"\nA stronger version would be: "${d.target}"`;
@@ -2836,6 +2844,194 @@ function startIntroDrills(indexes) {
 }
 $('btn-intro-drill').onclick = () => startIntroDrills();
 
+/* ---------- Meeting skeleton ----------
+   Meeting English splits in two. Some of it is decided by what the other side
+   just said and can only be improvised — following up, pushing back, asking
+   them to slow down mid-sentence. The rest happens in every meeting regardless:
+   opening, setting the agenda, changing topic, closing. Most people practise
+   both the same way and spend their attention re-inventing the predictable
+   half, which leaves nothing for the half that actually needs it.
+
+   These are the fixed assets. They do not depend on the domain — "I didn't
+   catch the number" is the same sentence in optics and in medical CDMO — so
+   they are generated once, kept, and maintained by the phrase bank's spacing. */
+const MEETING_MOMENTS = [
+  { id: 'smalltalk', label: '暖場閒聊', en: 'Small talk', cat: 'smalltalk', n: 3,
+    when: '正式開始前、等人進會議室的那三分鐘',
+    goal: 'Warm, short openers that do not sound like the interview has started. Include one that hands the floor back to them.' },
+  { id: 'agenda', label: '設定議程', en: 'Setting the agenda', cat: 'opening', n: 3,
+    when: '一開場就決定這場會誰在開車',
+    goal: 'Say what you want to cover and in what order, check it works for them, and name how long you have.' },
+  { id: 'transition', label: '轉場銜接', en: 'Transitions', cat: 'transition', n: 3,
+    when: '一個話題講完了，要換下一個',
+    goal: 'Close the current topic and open the next without sounding abrupt. Include one for cutting a long answer short politely.' },
+  { id: 'clarify', label: '聽不懂求救', en: 'Clarifying', cat: 'clarify', n: 4,
+    when: '沒聽清楚數字、對方講太快、術語不確定',
+    goal: 'Ask for a repeat, ask them to slow down, confirm a number or spelling, and check you understood — without over-apologising or sounding incompetent.' },
+  { id: 'probe', label: '追問挖深', en: 'Probing', cat: 'probing', n: 4,
+    when: '對方給了模糊答案，你要逼出數字與證據',
+    goal: 'A ladder, each rung harder to dodge: ask for specifics, ask what that is based on, test the claim against a concrete case, ask what would have to be true for it to hold.' },
+  { id: 'stance', label: '表達立場與保留', en: 'Stating a view', cat: 'opinion', n: 4,
+    when: '要表態、同意、有所保留、或明確反對',
+    goal: 'Agree with substance rather than politeness, half-agree, raise a reservation without rudeness, and disagree clearly but professionally.' },
+  { id: 'deflect', label: '擋球與閃避', en: 'Deflecting', cat: 'deflect', n: 3,
+    when: '對方問你不能講的事，或要你當場給承諾',
+    goal: 'Decline to share, buy time, and redirect — gracefully, without lying and without damaging the relationship.' },
+  { id: 'close', label: '收尾與下一步', en: 'Closing', cat: 'summary', n: 3,
+    when: '剩最後五分鐘，要把產出固定下來',
+    goal: 'Recap what was covered, confirm decisions and who does what by when, and set the next contact.' },
+];
+
+// An empty set is "not generated yet", not "generated and empty" — otherwise
+// clearing leaves a shell that renders 共 0 句.
+function getSkeleton() { try { const v = JSON.parse(localStorage.getItem(LS.skeleton)); return Array.isArray(v) && v.length ? v : null; } catch { return null; } }
+function setSkeleton(v) {
+  try {
+    if (v && v.length) localStorage.setItem(LS.skeleton, JSON.stringify(v));
+    else localStorage.removeItem(LS.skeleton);
+  } catch {}
+}
+
+$('btn-skeleton').onclick = () => {
+  $('skeleton-status').textContent = '';
+  const saved = getSkeleton();
+  if (saved) renderSkeleton(saved);
+  else { $('skeleton-result').innerHTML = ''; $('skeleton-actions').hidden = true; }
+  show('skeleton');
+};
+
+$('btn-skeleton-make').onclick = async () => {
+  if (!store.apiKey) { alert('請先到「設定」貼上 Gemini API 金鑰。'); show('settings'); return; }
+  const role = $('skeleton-role').value.trim();
+  const status = (t) => { $('skeleton-status').textContent = t; };
+  let stop = null;
+  try {
+    $('btn-skeleton-make').disabled = true;
+    stop = startTicker(status, 'AI 正在打造整套骨架…');
+    const raw = await callGemini([{ role: 'user', parts: [{ text:
+`Build a set of ready-made English phrases for a non-native speaker to memorise before business meetings.
+${role ? `The learner: ${role}` : 'The learner works in corporate strategy and investment, and interviews companies and partners.'}
+
+These are FIXED ASSETS: phrases that recur in every meeting regardless of the topic. Keep them domain-neutral — they must work whether the meeting is about optics, packaging or medical manufacturing. No industry nouns.
+
+For each phrase give:
+- "skeleton": the frame to memorise, with [square-bracket slots] for the parts that change
+- "example": the frame filled in once, so they can hear how it lands
+- "situationZh": ONE line in Traditional Chinese describing the moment that calls for it — written as a cue they will be shown WITHOUT the English, and must produce the phrase from. Concrete: what just happened in the room.
+- "watch": one thing a Chinese-speaking professional typically gets wrong here — a word order, a tense, an over-apology, something that sounds translated
+
+Spoken English, contractions welcome. Confident but not blunt: this person is senior and should sound it. Never obsequious — no "I would be extremely grateful if you could possibly".
+
+The moments:
+${MEETING_MOMENTS.map((m, i) => `${i + 1}. id "${m.id}" — ${m.en}, ${m.n} phrases. Used when: ${m.when}. ${m.goal}`).join('\n')}
+
+Return ONLY JSON:
+{
+  "moments": [
+    { "id": "<one of: ${MEETING_MOMENTS.map(m => m.id).join(', ')}>",
+      "phrases": [ { "skeleton": "...", "example": "...", "situationZh": "...", "watch": "..." } ] }
+  ]
+}` }] }], { json: true, temperature: 0.6, timeoutMs: 240000 });
+    stop(); stop = null;
+    const r = parseJson(raw);
+    // Keep the catalogue's order and labels; the model only fills phrases in.
+    const merged = MEETING_MOMENTS.map(m => ({
+      ...m,
+      phrases: ((r.moments || []).find(x => x.id === m.id)?.phrases || []).filter(p => p && (p.example || p.skeleton)),
+    })).filter(m => m.phrases.length);
+    if (!merged.length) { status('⚠️ 這次沒有生成出骨架，請再試一次。'); return; }
+    setSkeleton(merged);
+    status('');
+    renderSkeleton(merged);
+  } catch (e) {
+    status('⚠️ ' + e.message);
+  } finally {
+    if (stop) stop();
+    $('btn-skeleton-make').disabled = false;
+  }
+};
+
+function renderSkeleton(moments) {
+  const c = $('skeleton-result');
+  c.innerHTML = '';
+  const total = moments.reduce((n, m) => n + m.phrases.length, 0);
+  c.appendChild(p(`共 ${total} 句，依會議發生的順序排列。`));
+
+  moments.forEach((m, mi) => {
+    const d = el('div');
+    d.appendChild(el('div', 'card-meta', m.when));
+    m.phrases.forEach((ph, pi) => {
+      const item = el('div', 'skel-item');
+      if (ph.skeleton) {
+        const sk = el('div', 'intro-skeleton');
+        sk.textContent = ph.skeleton;
+        item.appendChild(sk);
+      }
+      if (ph.example) item.appendChild(p(ph.example));
+      if (ph.situationZh) item.appendChild(el('div', 'card-meta', '時機：' + ph.situationZh));
+      if (ph.watch) item.appendChild(el('div', 'card-meta', '⚠️ ' + ph.watch));
+      const acts = el('div', 'live-actions');
+      const say = el('button', 'ghost-btn', '🔊');
+      say.onclick = () => speak(ph.example || ph.skeleton);
+      const drill = el('button', 'ghost-btn', '🎤 練這句');
+      drill.onclick = () => startSkeletonDrills([[mi, pi]]);
+      acts.append(say, drill);
+      item.appendChild(acts);
+      d.appendChild(item);
+    });
+    const all = el('button', 'ghost-btn', `🎤 練這一段（${m.phrases.length} 句）`);
+    all.onclick = () => startSkeletonDrills(m.phrases.map((_, pi) => [mi, pi]));
+    d.appendChild(all);
+    c.appendChild(block(`${mi + 1}. ${m.label} · ${m.en}`, d));
+  });
+  $('skeleton-actions').hidden = false;
+}
+
+/* The cue is the situation, in Chinese, with the English hidden — producing it
+   from the moment is the skill; reading it aloud is not. */
+function startSkeletonDrills(pairs) {
+  const moments = getSkeleton() || [];
+  const drills = pairs.map(([mi, pi]) => {
+    const m = moments[mi]; const ph = m?.phrases?.[pi];
+    if (!ph) return null;
+    return {
+      kind: 'template',
+      prompt: ph.situationZh || m.when,
+      target: ph.example || ph.skeleton,
+      why: '',
+      title: `${m.label} — 這個時候你會怎麼說？`,
+    };
+  }).filter(Boolean);
+  if (!drills.length) return;
+  state.drills = drills;
+  state.drillIndex = 0;
+  state.drillResults = [];
+  renderDrill();
+  show('drill');
+}
+$('btn-skeleton-drill').onclick = () => {
+  const moments = getSkeleton() || [];
+  startSkeletonDrills(moments.flatMap((m, mi) => m.phrases.map((_, pi) => [mi, pi])));
+};
+$('btn-skeleton-save').onclick = () => {
+  const moments = getSkeleton() || [];
+  let n = 0;
+  moments.forEach(m => m.phrases.forEach(ph => {
+    n += addCards([{ text: ph.example || ph.skeleton, zh: ph.situationZh || m.label, cat: m.cat, star: true }], '會議骨架');
+    if (ph.skeleton && ph.example) n += addCards([{ text: ph.skeleton, zh: `骨架 · ${m.label}`, cat: m.cat, star: true }], '會議骨架');
+  }));
+  $('skeleton-status').textContent = n
+    ? `已存入語料庫 ${n} 張（重複的會自動略過），之後會排進每日複習。`
+    : '這些句子都已經在語料庫裡了。';
+};
+$('btn-skeleton-clear').onclick = () => {
+  if (!confirm('清掉目前這套骨架？\n\n已存進語料庫的卡片不會被刪除。')) return;
+  setSkeleton(null);
+  $('skeleton-result').innerHTML = '';
+  $('skeleton-actions').hidden = true;
+  $('skeleton-status').textContent = '已清除，可以重新生成。';
+};
+
 /* ============================================================
    SETTINGS
    ============================================================ */
@@ -3286,7 +3482,7 @@ restoreScreen();
 if (syncEnabled()) syncNow(true);
 
 /* ---------- About / force-update (like DD meeting-notes) ---------- */
-const APP_VERSION = 'v30';
+const APP_VERSION = 'v31';
 
 (function initAbout() {
   const ver = document.getElementById('app-version');
